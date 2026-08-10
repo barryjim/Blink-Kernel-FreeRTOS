@@ -34,16 +34,48 @@ runs:
         sudo apt-get update -qq
         sudo apt-get install -y -qq gcc-arm-none-eabi cmake ninja-build binutils-arm-none-eabi libnewlib-arm-none-eabi python3 python3-pip
 
-    - name: Install SLC-CLI
+    - name: Install Java & SLC-CLI
       shell: bash
       run: |
-        echo "=== Installing SLC-CLI ==="
-        pip3 install --upgrade pip -q
-        pip3 install slc-cli -q
-        if command -v slc &>/dev/null; then
-          echo "[OK] SLC-CLI installed: $(slc --version 2>/dev/null || echo 'version unknown')"
+        echo "=== Installing Java (JDK 11) ==="
+        sudo apt-get install -y -qq openjdk-11-jre-headless 2>/dev/null || \
+        sudo apt-get install -y -qq openjdk-17-jre-headless 2>/dev/null || \
+        sudo apt-get install -y -qq default-jre-headless
+        echo "[OK] Java: $(java -version 2>&1 | head -1)"
+
+        echo ""
+        echo "=== Downloading SLC-CLI ==="
+        SLC_DIR="${RUNNER_TEMP}/slc-cli"
+        mkdir -p "${SLC_DIR}"
+        cd "${SLC_DIR}"
+
+        SLC_DOWNLOADED=0
+        SLC_URLS=(
+          "https://www.silabs.com/documents/public/software/slc-cli-linux-amd64.tar.gz"
+          "https://www.silabs.com/documents/public/software/slc-cli-linux.tar.gz"
+          "https://www.silabs.com/develop-tools/simplicity-studio/slc-cli"
+        )
+
+        for url in "${SLC_URLS[@]}"; do
+          echo "Trying: ${url}"
+          if wget -q --timeout=30 --tries=2 "${url}" -O slc-cli.tar.gz 2>&1; then
+            echo "[OK] Downloaded SLC-CLI from ${url}"
+            tar xzf slc-cli.tar.gz 2>/dev/null || tar xf slc-cli.tar.gz 2>/dev/null
+            SLC_DOWNLOADED=1
+            break
+          fi
+        done
+
+        if [ ${SLC_DOWNLOADED} -eq 0 ]; then
+          echo "[WARN] SLC-CLI download from Silicon Labs failed"
+          echo "[INFO] Will use direct SDK download fallback"
         else
-          echo "[WARN] SLC-CLI not available, will try alternative SDK installation"
+          SLC_BIN=$(find . -name "slc" -o -name "slc-cli" -type f 2>/dev/null | head -1)
+          if [ -n "${SLC_BIN}" ]; then
+            chmod +x "${SLC_BIN}"
+            echo "[OK] Found SLC-CLI: ${SLC_BIN}"
+            echo "${SLC_BIN}" > "${RUNNER_TEMP}/slc-path"
+          fi
         fi
 
     - name: Verify toolchain
@@ -53,7 +85,9 @@ runs:
         echo "CMake:   $(cmake --version | head -1)"
         echo "Ninja:   $(ninja --version)"
         echo "Python:  $(python3 --version)"
-        echo "SLC-CLI: $(slc --version 2>/dev/null || echo 'not available')"
+        echo "Java:    $(java -version 2>&1 | head -1)"
+        SLC_PATH=$(cat "${RUNNER_TEMP}/slc-path" 2>/dev/null || echo "")
+        echo "SLC-CLI: ${SLC_PATH:-not available}"
 
     - name: Build firmware
       id: build
@@ -81,50 +115,88 @@ runs:
             exit 0
         fi
 
-        # ========== Install SDK via SLC-CLI ==========
+        # ========== Install SDK ==========
         SDK_DIR="${WORKSPACE}/simplicity_sdk"
         mkdir -p "${SDK_DIR}"
+        SLC_PATH=$(cat "${RUNNER_TEMP}/slc-path" 2>/dev/null || echo "")
+        SDK_PATH=""
 
-        echo "=== Installing Silicon Labs SDK ==="
-        SDK_INSTALLED=0
-        for pkg in simplemg301 simg301 simplicity_sdk; do
-          echo "Trying: slc sdk install ${pkg}"
-          if slc sdk install "${pkg}" 2>&1; then
-            echo "[OK] Installed: ${pkg}"
-            SDK_INSTALLED=1
-            break
+        echo "=== Silicon Labs SDK Setup ==="
+
+        # --- Method 1: SLC-CLI (if available) ---
+        if [ -n "${SLC_PATH}" ] && [ -x "${SLC_PATH}" ]; then
+          echo "[METHOD 1] Using SLC-CLI to install SDK..."
+          "${SLC_PATH}" --version 2>&1 || true
+
+          SLCP_FILE="${WORKSPACE}/${PROJECT_NAME}.slcp"
+          if [ -f "${SLCP_FILE}" ]; then
+            echo "  Using project config: ${SLCP_FILE}"
+            "${SLC_PATH}" project generate --update -p "${SLCP_FILE}" 2>&1 || true
           fi
-        done
-        if [ ${SDK_INSTALLED} -eq 0 ]; then
-          echo "[WARN] SLC-CLI install failed, searching..."
+
+          for pkg in simplicity_sdk simg301 simplemg301; do
+            echo "  Trying: slc sdk install ${pkg}"
+            "${SLC_PATH}" sdk install "${pkg}" 2>&1 && { echo "[OK] Installed: ${pkg}"; break; }
+          done
         fi
 
-        # ========== Locate SDK ==========
-        SDK_PATH=""
+        # --- Method 2: Search filesystem ---
+        echo ""
+        echo "[METHOD 2] Searching for SDK..."
         for candidate in \
             "${SDK_DIR}" \
             "${HOME}/.slc/sdk" \
             "${HOME}/.silabs/slt/installs" \
-            "/opt/simplicity-sdk"; do
+            "/opt/simplicity-sdk" \
+            "/tmp/simplicity_sdk"; do
             if [ -d "${candidate}" ] && [ -d "${candidate}/devices/platform/Device/SiliconLabs/SIMG301" ]; then
                 SDK_PATH="${candidate}"
                 echo "[OK] Found SDK: ${SDK_PATH}"
                 break
             fi
         done
+
         if [ -z "${SDK_PATH}" ]; then
-            SDK_PATH=$(find "${HOME}" /opt /usr/share -maxdepth 6 -type d -name "SIMG301" -path "*/Device/SiliconLabs/*" 2>/dev/null | head -1 | sed 's|/devices.*||')
+            SDK_PATH=$(find "${HOME}" /opt /usr/share /tmp -maxdepth 8 \
+                -type d -name "SIMG301" -path "*/Device/SiliconLabs/*" 2>/dev/null | head -1 | sed 's|/devices.*||')
             [ -n "${SDK_PATH}" ] && echo "[OK] Found SDK: ${SDK_PATH}"
         fi
+
+        # --- Method 3: Direct SDK download ---
         if [ -z "${SDK_PATH}" ]; then
-            echo "::error::SDK not found. Cannot build."
-            echo "::error::Try: slc sdk install simplemg301"
-            echo "success=false" >> $GITHUB_OUTPUT
-            echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
-            if [ "${FAIL_ON_ERROR}" == "true" ]; then
-                exit 1
+          echo ""
+          echo "[METHOD 3] Direct SDK download..."
+          SDK_URLS=(
+            "https://www.silabs.com/documents/public/software/simplicity-sdk-2025.12.2-linux-amd64.tar.gz"
+            "https://www.silabs.com/documents/public/software/simplicity-sdk-linux.tar.gz"
+            "https://github.com/SiliconLabs/simplicity-sdk/releases/download/v2025.12.2/simplicity-sdk-2025.12.2.tar.gz"
+          )
+          for url in "${SDK_URLS[@]}"; do
+            echo "  Trying: ${url}"
+            if wget -q --timeout=60 --tries=2 "${url}" -O /tmp/simplicity-sdk.tar.gz 2>&1; then
+              echo "[OK] Downloaded SDK, extracting..."
+              tar xzf /tmp/simplicity-sdk.tar.gz -C "${SDK_DIR}" 2>/dev/null || \
+              tar xf /tmp/simplicity-sdk.tar.gz -C "${SDK_DIR}" 2>/dev/null
+              SDK_PATH=$(find "${SDK_DIR}" -maxdepth 3 -name "SIMG301" -type d 2>/dev/null | head -1 | sed 's|/devices.*||')
+              [ -n "${SDK_PATH}" ] || SDK_PATH="${SDK_DIR}"
+              [ -n "${SDK_PATH}" ] && echo "[OK] SDK at: ${SDK_PATH}"
+              break
             fi
-            exit 0
+          done
+        fi
+
+        if [ -z "${SDK_PATH}" ]; then
+          echo "::error::SDK not found. Cannot build."
+          echo "::error::Please download Silicon Labs SDK manually:"
+          echo "::error::  1. Visit https://www.silabs.com/develop-tools/simplicity-studio"
+          echo "::error::  2. Download Simplicity SDK for MG301 (SIMG301M104LIL)"
+          echo "::error::  3. Store as GitHub release asset or configure SLC-CLI"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
+          if [ "${FAIL_ON_ERROR}" == "true" ]; then
+            exit 1
+          fi
+          exit 0
         fi
 
         # ========== Patch CMake file ==========
