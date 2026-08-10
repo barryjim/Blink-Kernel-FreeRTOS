@@ -1,0 +1,54 @@
+version: 1
+project:
+  name: blink_kernel_freertos_s3
+  type: platform
+  device: SIMG301M104LIL
+  toolchain: arm-none-eabi-gcc
+
+sdk:
+  vendor: silabs
+  id: simplicity_sdk
+  version: 2025.12.2
+
+components:
+  - id: SIMG301M104LIL
+    vendor: silabs
+    package: simplicity_sdk
+  - id: brd4407a
+    vendor: silabs
+    package: simplicity_sdk
+  - id: clock_manager
+    vendor: silabs
+    package: simplicity_sdk
+  - id: device_init
+    vendor: silabs
+    package: simplicity_sdk
+  - id: freertos
+    vendor: silabs
+    package: simplicity_sdk
+  - id: simple_led
+    vendor: silabs
+    package: simplicity_sdk
+  - id: sl_main
+    vendor: silabs
+    package: simplicity_sdk
+  - id: sleeptimer
+    vendor: silabs
+    package: simplicity_sdk
+
+build:
+  cmake_dir: cmake_gcc
+  preset: project
+  configurations:
+    - base
+  artifacts:
+    - .bin
+    - .hex
+    - .map
+
+ci:
+  image: ghcr.io/silabs-software/slc-build:latest
+  tools:
+    - cmake
+    - ninja
+    - arm-none-eabi-gcc
