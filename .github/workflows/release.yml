@@ -8,63 +8,19 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Tag name (e.g., v1.0.0)'
+        description: 'Tag name (e.g., v1.0.1)'
         required: false
         type: string
 
 jobs:
-  CodeAnalysis:
-    name: Pre-release Code Checks
+  Package:
+    name: Package Prebuilt Firmware
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Maximize runner disk
-        uses: ./.github/actions/maximize-runner-disk
-
-      - name: Make scripts executable
-        run: |
-          chmod +x scripts/*/*.sh scripts/**/*.sh 2>/dev/null || true
-
-      - name: Setup tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq git python3-pip
-
-      - name: Setup cpplint
-        run: |
-          if [ ! -d "third_party" ]; then
-            mkdir -p third_party
-          fi
-          if [ ! -d "third_party/cpplint" ]; then
-            git clone --depth 1 https://github.com/cpplint/cpplint.git third_party/cpplint
-          fi
-
-      - name: Run cpplint
-        run: |
-          bash ./scripts/linter/linter.sh -p
-
-      - name: Upload lint report
-        uses: actions/upload-artifact@v4
-        if: ${{ success() }}
-        with:
-          name: lint_report
-          path: code_quality_report/
-          retention-days: 30
-
-  Build:
-    name: Build & Package
-    needs: CodeAnalysis
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Maximize runner disk
-        uses: ./.github/actions/maximize-runner-disk
-
-      - name: Determine tag version
+      - name: Determine version
         id: version
         run: |
           TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag_name }}}"
@@ -73,153 +29,107 @@ jobs:
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "Release version: ${VERSION} from tag: ${TAG}"
 
-      - name: Install build tools
+      - name: Verify prebuilt firmware
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            gcc-arm-none-eabi cmake ninja-build binutils-arm-none-eabi \
-            libnewlib-arm-none-eabi python3 python3-pip wget curl jq file
-
-      # ---------- Optional: download SDK if Release asset exists ----------
-      - name: Download SDK from GitHub Release (optional)
-        id: sdk
-        continue-on-error: true
-        run: |
-          SDK_DIR="${GITHUB_WORKSPACE}/simplicity_sdk"
-          mkdir -p "${SDK_DIR}"
-
-          ASSET_URL=$(python3 ./scripts/fw_packaging/find_sdk.py "${{ github.repository }}" 2>/dev/null)
-
-          if [ -n "${ASSET_URL}" ]; then
-            echo "[OK] Found SDK asset, downloading..."
-            wget -q --timeout=180 --tries=2 "${ASSET_URL}" -O /tmp/simplicity-sdk.tar.gz 2>&1
-            if [ -f /tmp/simplicity-sdk.tar.gz ] && [ -s /tmp/simplicity-sdk.tar.gz ]; then
-                echo "[OK] Downloaded, extracting..."
-                tar xzf /tmp/simplicity-sdk.tar.gz -C "${SDK_DIR}" 2>/dev/null || \
-                tar xf /tmp/simplicity-sdk.tar.gz -C "${SDK_DIR}" 2>/dev/null || \
-                unzip -qo /tmp/simplicity-sdk.tar.gz -d "${SDK_DIR}" 2>/dev/null || true
-
-                SDK_PATH=$(find "${SDK_DIR}" -maxdepth 6 -type d -name "SIMG301" -path "*/Device/SiliconLabs/*" 2>/dev/null | head -1 | sed 's|/devices.*||')
-                [ -z "${SDK_PATH}" ] && SDK_PATH=$(find "${SDK_DIR}" -maxdepth 6 -type d -name "freertos" -path "*/kernel/*" 2>/dev/null | head -1 | sed 's|/freertos/kernel||')
-                [ -z "${SDK_PATH}" ] && SDK_PATH="${SDK_DIR}"
-                echo "[OK] SDK at: ${SDK_PATH}"
-                echo "sdk_path=${SDK_PATH}" >> $GITHUB_OUTPUT
-                echo "sdk_found=true" >> $GITHUB_OUTPUT
-            else
-                echo "[WARN] Download failed"
-                echo "sdk_found=false" >> $GITHUB_OUTPUT
+          PROJECT_NAME="blink_kernel_freertos_s3"
+          FW_COUNT=0
+          for ext in bin hex s37 map out; do
+            f="prebuilt/${PROJECT_NAME}.${ext}"
+            if [ -f "$f" ]; then
+              echo "  [OK] $f ($(stat --format=%s "$f") bytes)"
+              FW_COUNT=$((FW_COUNT + 1))
             fi
-          else
-            echo "[INFO] No SDK release asset found - using pre-built artifacts mode"
-            echo "sdk_found=false" >> $GITHUB_OUTPUT
+          done
+          if [ $FW_COUNT -eq 0 ]; then
+            echo "::error::No firmware files found in prebuilt/"
+            echo "  Build firmware locally with Simplicity Studio, then run:"
+            echo "    bash scripts/fw_packaging/artifacts.sh --sync"
+            echo "    git add prebuilt/ && git commit && git push"
+            exit 1
+          fi
+          echo "Found ${FW_COUNT} firmware files in prebuilt/"
+
+      - name: Create release archive
+        id: archive
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          PROJECT_NAME="blink_kernel_freertos_s3"
+          ARCHIVE_NAME="${PROJECT_NAME}-${VERSION}.tar.gz"
+          ARCHIVE_PATH="${GITHUB_WORKSPACE}/${ARCHIVE_NAME}"
+
+          echo "Creating ${ARCHIVE_NAME} from prebuilt/ ..."
+
+          cd prebuilt
+          FILES=""
+          for ext in bin hex s37 map out; do
+            f="${PROJECT_NAME}.${ext}"
+            [ -f "$f" ] && FILES="$FILES $f"
+          done
+
+          if [ -z "$FILES" ]; then
+            echo "::error::No firmware files in prebuilt/"
+            exit 1
           fi
 
-      - name: Patch CMake with SDK path
-        if: steps.sdk.outputs.sdk_found == 'true'
-        run: |
-          SDK_PATH="${{ steps.sdk.outputs.sdk_path }}"
-          CMAKE_FILE="${GITHUB_WORKSPACE}/cmake_gcc/blink_kernel_freertos_s3.cmake"
-          if [ -f "${CMAKE_FILE}" ] && [ -d "${SDK_PATH}" ]; then
-            cp "${CMAKE_FILE}" "${CMAKE_FILE}.bak"
-            sed -i "s|set(SDK_PATH \"[^\"]*\")|set(SDK_PATH \"${SDK_PATH}\")|" "${CMAKE_FILE}"
-            echo "[OK] Patched CMake"
-          fi
-
-      # ---------- Build via artifacts.sh ----------
-      - name: Build with artifacts.sh
-        id: build
-        shell: bash
-        env:
-          SIMPLICITY_SDK: ${{ steps.sdk.outputs.sdk_path }}
-          SILABS_SDK_PATH: ${{ steps.sdk.outputs.sdk_path }}
-          ARM_GCC_DIR: /usr
-          NINJA_EXE_PATH: /usr/bin/ninja
-          FAIL_ON_ERROR: false
-        run: |
-          set +e
+          echo "Files to archive:$FILES"
+          tar -zcvf "${ARCHIVE_PATH}" $FILES
           cd "${GITHUB_WORKSPACE}"
 
-          chmod +x scripts/*/*.sh scripts/**/*.sh 2>/dev/null || true
-
-          echo "=== Build Environment ==="
-          echo "SIMPLICITY_SDK: ${SIMPLICITY_SDK:-not set}"
-          echo "VERSION: ${{ steps.version.outputs.version }}"
-
-          bash ./scripts/fw_packaging/artifacts.sh -t base
-          BUILD_RC=$?
-
-          ARTIFACTS_DIR="${GITHUB_WORKSPACE}/artifacts"
-          PROJECT_NAME="blink_kernel_freertos_s3"
-          VERSION="${{ steps.version.outputs.version }}"
-          OUT_DIR="${ARTIFACTS_DIR}/${PROJECT_NAME}-${VERSION}"
-          mkdir -p "${OUT_DIR}"
-
-          if [ -d "${ARTIFACTS_DIR}" ]; then
-            cp -r "${ARTIFACTS_DIR}"/* "${OUT_DIR}/" 2>/dev/null || true
+          if [ ! -f "${ARCHIVE_PATH}" ] || [ ! -s "${ARCHIVE_PATH}" ]; then
+            echo "::error::Failed to create archive"
+            exit 1
           fi
 
-          FW_COUNT=$(find "${OUT_DIR}" -type f \( -name "*.bin" -o -name "*.hex" -o -name "*.s37" -o -name "*.map" -o -name "*.out" \) 2>/dev/null | wc -l)
-          if [ ${FW_COUNT} -gt 0 ]; then
-            echo "[OK] Build succeeded, ${FW_COUNT} firmware file(s)"
-            echo "success=true" >> $GITHUB_OUTPUT
-          else
-            echo "[WARN] No firmware files generated. Build exit code: ${BUILD_RC}"
-            echo "success=false" >> $GITHUB_OUTPUT
-          fi
-          echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
-
+          echo "[OK] Created ${ARCHIVE_NAME} ($(du -h "${ARCHIVE_PATH}" | cut -f1))"
           echo ""
-          echo "=== Build Summary ==="
-          echo "Result: $([ ${FW_COUNT} -gt 0 ] && echo 'SUCCESS' || echo 'NO FIRMWARE')"
-          echo "Output: ${OUT_DIR}/"
-          ls -la "${OUT_DIR}/" 2>/dev/null || echo "  (empty)"
+          echo "Archive contents:"
+          tar tzf "${ARCHIVE_PATH}"
 
-      # ---------- Prepare release assets ----------
-      - name: Prepare release assets
-        run: |
-          ARTIFACTS_DIR="${{ steps.build.outputs.artifacts_dir }}"
-          VERSION="${{ steps.version.outputs.version }}"
-          PROJECT_NAME="blink_kernel_freertos_s3"
+          echo "archive_name=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
+          echo "archive_path=${ARCHIVE_PATH}" >> $GITHUB_OUTPUT
 
-          if [ -d "${ARTIFACTS_DIR}" ] && [ "$(ls -A "${ARTIFACTS_DIR}" 2>/dev/null)" ]; then
-            echo "Build artifacts ready for release."
-            tar -zcvf "${PROJECT_NAME}-${VERSION}.tar.gz" -C "$(dirname ${ARTIFACTS_DIR})" "$(basename ${ARTIFACTS_DIR})"
-          else
-            echo "::warning::No build artifacts found. Creating placeholder."
-            touch "${PROJECT_NAME}-${VERSION}.tar.gz"
-          fi
-
-          # Also create an alias name expected by later step
-          cp "${PROJECT_NAME}-${VERSION}.tar.gz" artifacts.tar.gz
-
-      - name: Upload build artifacts
+      - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release_artifacts
-          path: |
-            artifacts.tar.gz
-            ${{ steps.build.outputs.artifacts_dir }}
+          name: release_package
+          path: ${{ steps.archive.outputs.archive_path }}
           retention-days: 90
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   Release:
     name: Create GitHub Release
-    needs: Build
+    needs: Package
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
-      - name: Download artifacts
+      - name: Download release artifact
         uses: actions/download-artifact@v4
         with:
-          name: release_artifacts
-          path: artifacts/
+          name: release_package
+          path: release_assets/
+
+      - name: Verify artifact
+        run: |
+          echo "=== Release assets ==="
+          ls -la release_assets/
+
+          ARCHIVE=$(ls release_assets/*.tar.gz 2>/dev/null | head -1)
+          if [ -z "${ARCHIVE}" ] || [ ! -f "${ARCHIVE}" ]; then
+            echo "::error::No release archive found!"
+            exit 1
+          fi
+
+          echo "Archive: ${ARCHIVE}"
+          echo "Size: $(du -h "${ARCHIVE}" | cut -f1)"
+          echo ""
+          echo "Archive contents:"
+          tar tzf "${ARCHIVE}"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/artifacts.tar.gz
+          files: release_assets/*.tar.gz
           generate_release_notes: true
           draft: false
           prerelease: false

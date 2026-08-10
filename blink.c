@@ -29,7 +29,7 @@
 #endif
 
 #ifndef TOOGLE_DELAY_MS
-#define TOOGLE_DELAY_MS            2000
+#define TOOGLE_DELAY_MS            200
 #endif
 
 #ifndef BLINK_TASK_STACK_SIZE

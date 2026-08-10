@@ -6459,7 +6459,7 @@ LOAD linker stubs
                 0x00000000000001a6        0xc /home/tuya/.silabs/slt/installs/conan/p/gcc-a442105b5c2637/p/bin/../lib/gcc/arm-none-eabi/12.2.1/thumb/v8-m.main+fp/hard/libgcc.a(_dvmd_tls.o)
                                          0xca (size before relaxing)
 
-.debug_info     0x0000000000000000    0x48ec6
+.debug_info     0x0000000000000000    0x48ec4
  .debug_info    0x0000000000000000      0x5d3 CMakeFiles/slc.dir/base/home/tuya/.silabs/slt/installs/conan/p/simpl965e19baece23/p/boards/hardware/board/src/sl_board_control_gpio.c.obj
  .debug_info    0x00000000000005d3      0x125 CMakeFiles/slc.dir/base/home/tuya/.silabs/slt/installs/conan/p/simpl965e19baece23/p/boards/hardware/board/src/sl_board_init.c.obj
  .debug_info    0x00000000000006f8     0x1ab4 CMakeFiles/slc.dir/base/home/tuya/.silabs/slt/installs/conan/p/simpl965e19baece23/p/devices/platform/Device/SiliconLabs/SIMG301/Source/startup_simg301.c.obj
@@ -6528,8 +6528,8 @@ LOAD linker stubs
  .debug_info    0x0000000000048375       0x7f CMakeFiles/slc.dir/base/home/tuya/SimplicityStudio/MG301_Board/blink_kernel_freertos_s3/autogen/sl_board_default_init.c.obj
  .debug_info    0x00000000000483f4      0x27d CMakeFiles/slc.dir/base/home/tuya/SimplicityStudio/MG301_Board/blink_kernel_freertos_s3/autogen/sl_event_handler.c.obj
  .debug_info    0x0000000000048671      0x2e1 CMakeFiles/slc.dir/base/home/tuya/SimplicityStudio/MG301_Board/blink_kernel_freertos_s3/autogen/sl_simple_led_instances.c.obj
- .debug_info    0x0000000000048952      0x4df CMakeFiles/slc.dir/base/home/tuya/SimplicityStudio/MG301_Board/blink_kernel_freertos_s3/blink.c.obj
- .debug_info    0x0000000000048e31       0x95 CMakeFiles/slc.dir/base/home/tuya/SimplicityStudio/MG301_Board/blink_kernel_freertos_s3/main.c.obj
+ .debug_info    0x0000000000048952      0x4dd CMakeFiles/slc.dir/base/home/tuya/SimplicityStudio/MG301_Board/blink_kernel_freertos_s3/blink.c.obj
+ .debug_info    0x0000000000048e2f       0x95 CMakeFiles/slc.dir/base/home/tuya/SimplicityStudio/MG301_Board/blink_kernel_freertos_s3/main.c.obj
 
 .debug_abbrev   0x0000000000000000     0xa911
  .debug_abbrev  0x0000000000000000      0x1bb CMakeFiles/slc.dir/base/home/tuya/.silabs/slt/installs/conan/p/simpl965e19baece23/p/boards/hardware/board/src/sl_board_control_gpio.c.obj
