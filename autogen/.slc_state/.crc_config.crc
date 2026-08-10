@@ -1,0 +1,15 @@
+#CRC Codes for initially generated config files -- do not modify!
+FreeRTOSConfig.h=-1524425647
+sl_board_control_config.h=75272942
+sl_clock_manager_oscillator_config.h=1125152137
+sl_clock_manager_tree_config.h=1736313077
+sl_core_config.h=-1854422791
+sl_custom_manufacturing_token_header.h=-660341907
+sl_debug_swo_config.h=1263265442
+sl_main_start_task_config.h=5881419
+sl_memory_manager_config.h=-21294862
+sl_memory_manager_region_config.h=-335509190
+sl_simple_led_led0_config.h=1891421914
+sl_sleeptimer_config.h=1108469985
+sl_token_manager_config.h=1743491006
+sli_ksu_keyslots_config.h=6179545

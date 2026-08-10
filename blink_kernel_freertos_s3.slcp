@@ -1,0 +1,71 @@
+# Silicon Labs Project Configuration Tools: slcp, v0, Component selection file.
+project_name: blink_kernel_freertos_s3
+label: blink_kernel_freertos_s3
+description: |
+  This example project shows how to blink an LED using a FreeRTOS kernel task. The blink task can be created using either dynamic or static memory allocation for the task stack and tcb.
+category: Example|Platform
+filter:
+- name: Device Type
+  value:
+  - SoC
+- name: MCU
+  value:
+  - 32-bit MCU
+- name: Project Difficulty
+  value:
+  - Beginner
+package: platform
+quality: production
+readme:
+- path: readme.md
+source:
+- path: app.c
+- path: blink.c
+tag:
+- hardware:component:led:1+
+- hardware:device:ram:20
+include:
+- path: .
+  file_list:
+  - path: app.h
+  - path: blink.h
+sdk:
+  vendor: silabs
+  id: simplicity_sdk
+  version: 2025.12.2
+toolchain_settings: [
+  ]
+component:
+- package: simplicity_sdk
+  vendor: silabs
+  id: SIMG301M104LIL
+- package: simplicity_sdk
+  vendor: silabs
+  id: brd4407a
+- package: simplicity_sdk
+  vendor: silabs
+  id: clock_manager
+- package: simplicity_sdk
+  vendor: silabs
+  id: device_init
+- package: simplicity_sdk
+  vendor: silabs
+  id: freertos
+- package: simplicity_sdk
+  instance:
+  - led0
+  vendor: silabs
+  id: simple_led
+- package: simplicity_sdk
+  vendor: silabs
+  id: sl_main
+- package: simplicity_sdk
+  vendor: silabs
+  id: sleeptimer
+define:
+- name: DEBUG_EFM
+ui_hints:
+  highlight:
+  - path: readme.md
+    focus: true
+

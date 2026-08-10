@@ -1,0 +1,4 @@
+/home/tuya/SimplicityStudio/MG301_Board/blink_kernel_freertos_s3/cmake_gcc/build/CMakeFiles/slc.dir
+/home/tuya/SimplicityStudio/MG301_Board/blink_kernel_freertos_s3/cmake_gcc/build/CMakeFiles/blink_kernel_freertos_s3.dir
+/home/tuya/SimplicityStudio/MG301_Board/blink_kernel_freertos_s3/cmake_gcc/build/CMakeFiles/edit_cache.dir
+/home/tuya/SimplicityStudio/MG301_Board/blink_kernel_freertos_s3/cmake_gcc/build/CMakeFiles/rebuild_cache.dir
