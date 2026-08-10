@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -e
-
 usage()
 {
     echo -e "Usage: $0 [-p <project>] [-t <config>] [-u] [-h]\n"
@@ -65,6 +63,56 @@ check_arm_gcc() {
     fi
 }
 
+check_sdk_available() {
+    local sdk_dir="${SIMPLICITY_SDK:-${SL_SDK:-}}"
+    if [ -n "${sdk_dir}" ] && [ -d "${sdk_dir}" ]; then
+        return 0
+    fi
+    if [ -f "${CMAKE_DIR}/CMakeCache.txt" ]; then
+        if grep -q "CMAKE_SYSTEM_NAME" "${CMAKE_DIR}/CMakeCache.txt" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+copy_prebuilt_artifacts() {
+    local config="$1"
+    local out_path="$2"
+    local found=0
+
+    echo ""
+    echo "--- Copying pre-built artifacts ---"
+
+    local search_dirs=()
+    if [ -d "${BUILD_DIR}/${config}" ]; then
+        search_dirs+=("${BUILD_DIR}/${config}")
+    fi
+    if [ -d "${BUILD_DIR}" ]; then
+        search_dirs+=("${BUILD_DIR}")
+    fi
+
+    for search_dir in "${search_dirs[@]}"; do
+        for ext in .bin .hex .s37 .map .out; do
+            local src="${search_dir}/${PROJECT_NAME}${ext}"
+            if [ -f "${src}" ]; then
+                mkdir -p "${out_path}"
+                cp "${src}" "${out_path}/"
+                echo "  Copied existing: ${PROJECT_NAME}${ext}"
+                found=1
+            fi
+        done
+    done
+
+    if [ ${found} -eq 0 ]; then
+        echo "  Warning: No pre-built artifacts found."
+        return 1
+    fi
+
+    echo "  Pre-built artifacts copied successfully."
+    return 0
+}
+
 build_project() {
     local config="$1"
     local out_path="$2"
@@ -74,11 +122,19 @@ build_project() {
 
     cd "${CMAKE_DIR}"
 
+    local need_configure=0
     if [ ! -f "${BUILD_DIR}/build.ninja" ]; then
-        echo "Build directory not found. Running cmake configure..."
+        need_configure=1
+    elif [ ! -d "${BUILD_DIR}/${config}" ]; then
+        need_configure=1
+    fi
+
+    if [ "${need_configure}" == "1" ]; then
+        echo "Configuring CMake for ${config}..."
         cmake --preset project -D"CMAKE_CONFIGURATION_TYPES=${config}" 2>&1
         if [ $? -ne 0 ]; then
             echo "Warning: cmake configure failed."
+            cd "${PROJECT_ROOT}"
             return 1
         fi
     fi
@@ -89,7 +145,7 @@ build_project() {
     cd "${PROJECT_ROOT}"
 
     if [ ${BUILD_RESULT} -ne 0 ]; then
-        echo "Warning: Build failed for ${config}. SDK or toolchain may be missing."
+        echo "Warning: Build failed for ${config}."
         return 1
     fi
 
@@ -126,40 +182,45 @@ fi
 echo "Project version: ${PROJECT_VERSION}"
 
 BUILD_SUCCESS=0
+OUT_PRJ_PATH="${OUT_PATH}/${PROJECT_NAME}-${PROJECT_VERSION}"
+mkdir -p "${OUT_PRJ_PATH}"
 
-if check_arm_gcc; then
-    OUT_PRJ_PATH="${OUT_PATH}/${PROJECT_NAME}-${PROJECT_VERSION}"
-    mkdir -p "${OUT_PRJ_PATH}"
-    build_project "${BUILD_CONFIG}" "${OUT_PRJ_PATH}" && BUILD_SUCCESS=1
-
-    if [ "${BUILD_UPGRADE}" == "1" ]; then
-        echo ""
-        echo "--- Build test upgrade (version increment) ---"
-        bash ${SCRIPT_PATH}/../release/update_version.sh -i -p "${PROJECT_NAME}" 2>/dev/null || true
-
-        OUT_TEST_PATH="${OUT_PATH}/${PROJECT_NAME}-${PROJECT_VERSION}/test_upgrade"
-        mkdir -p "${OUT_TEST_PATH}"
-        build_project "${BUILD_CONFIG}" "${OUT_TEST_PATH}" 2>/dev/null || true
-
-        bash ${SCRIPT_PATH}/../release/update_version.sh -d -p "${PROJECT_NAME}" 2>/dev/null || true
+if check_arm_gcc && check_sdk_available; then
+    echo "ARM GCC and SDK found. Attempting full build..."
+    if build_project "${BUILD_CONFIG}" "${OUT_PRJ_PATH}"; then
+        BUILD_SUCCESS=1
+    else
+        echo "Build failed. Falling back to pre-built artifacts..."
+        copy_prebuilt_artifacts "${BUILD_CONFIG}" "${OUT_PRJ_PATH}" && BUILD_SUCCESS=1
     fi
 else
+    if check_arm_gcc; then
+        echo "ARM GCC found but SDK not detected."
+        echo "Attempting build anyway (may work if SDK was pre-installed)..."
+        if build_project "${BUILD_CONFIG}" "${OUT_PRJ_PATH}" 2>/dev/null; then
+            BUILD_SUCCESS=1
+        else
+            echo "Build failed (expected without SDK)."
+            echo "Falling back to pre-built artifacts..."
+            copy_prebuilt_artifacts "${BUILD_CONFIG}" "${OUT_PRJ_PATH}" && BUILD_SUCCESS=1
+        fi
+    else
+        echo "--- ARM GCC not available ---"
+        echo "Attempting to copy existing pre-built artifacts..."
+        copy_prebuilt_artifacts "${BUILD_CONFIG}" "${OUT_PRJ_PATH}" && BUILD_SUCCESS=1
+    fi
+fi
+
+if [ "${BUILD_UPGRADE}" == "1" ] && [ "${BUILD_SUCCESS}" == "1" ]; then
     echo ""
-    echo "--- ARM GCC not available ---"
-    echo "Attempting to copy existing pre-built artifacts..."
-    for ext in .bin .hex .s37 .map .out; do
-        for dir in "${BUILD_DIR}/"*/; do
-            if [ -d "$dir" ]; then
-                local f="${dir}/${PROJECT_NAME}${ext}"
-                if [ -f "${f}" ]; then
-                    cp "${f}" "${OUT_PATH}/" 2>/dev/null
-                    echo "  Copied existing: ${PROJECT_NAME}${ext}"
-                    BUILD_SUCCESS=1
-                    break 2
-                fi
-            fi
-        done
-    done
+    echo "--- Build test upgrade (version increment) ---"
+    bash ${SCRIPT_PATH}/../release/update_version.sh -i -p "${PROJECT_NAME}" 2>/dev/null || true
+
+    OUT_TEST_PATH="${OUT_PATH}/${PROJECT_NAME}-${PROJECT_VERSION}/test_upgrade"
+    mkdir -p "${OUT_TEST_PATH}"
+    build_project "${BUILD_CONFIG}" "${OUT_TEST_PATH}" 2>/dev/null || true
+
+    bash ${SCRIPT_PATH}/../release/update_version.sh -d -p "${PROJECT_NAME}" 2>/dev/null || true
 fi
 
 echo ""

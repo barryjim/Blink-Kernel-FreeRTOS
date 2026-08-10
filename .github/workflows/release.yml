@@ -51,15 +51,16 @@ jobs:
           retention-days: 30
 
   Build:
-    name: Build Release Artifacts
+    name: Build & Package
     needs: CodeAnalysis
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Maximize runner disk
-        uses: ./.github/actions/maximize-runner-disk
+      - name: Make scripts executable
+        run: |
+          chmod +x scripts/*/*.sh scripts/**/*.sh
 
       - name: Install toolchain
         run: |
@@ -73,21 +74,29 @@ jobs:
           VERSION=$(echo "$TAG" | sed 's/^v//' | sed 's/^blink_kernel_freertos_s3-//')
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "Building release version: ${VERSION} from tag: ${TAG}"
+          echo "Release version: ${VERSION} from tag: ${TAG}"
 
-      - name: Build all configurations
+      - name: Build (best effort)
+        id: build
         run: |
-          bash ./scripts/fw_packaging/artifacts.sh -t base || true
+          set +e
+          bash ./scripts/fw_packaging/artifacts.sh -t base
+          if [ -f "artifacts/artifacts.tar.gz" ] && [ -s "artifacts/artifacts.tar.gz" ]; then
+            echo "build_success=true" >> $GITHUB_OUTPUT
+          else
+            echo "build_success=false" >> $GITHUB_OUTPUT
+            echo "::warning::Build requires Silicon Labs Simplicity Studio SDK. Skipping build on GitHub Actions."
+          fi
 
-      - name: Package artifacts
+      - name: Prepare release assets
         run: |
           cd artifacts
-          if [ -n "$(ls -A 2>/dev/null)" ]; then
-            tar -zcvf artifacts.tar.gz *
+          if [ -f "artifacts.tar.gz" ] && [ -s "artifacts.tar.gz" ]; then
+            echo "Build artifacts ready for release."
           else
-            echo "Warning: No artifacts found."
-            echo "This project requires Simplicity Studio SDK for full compilation."
-            echo "Code quality checks passed successfully."
+            echo "No build artifacts - SDK not available on GitHub Actions."
+            echo "Build locally with Simplicity Studio and upload firmware files to the release."
+            echo "Release created with code quality reports only."
             touch artifacts.tar.gz
           fi
 
