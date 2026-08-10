@@ -111,46 +111,32 @@ jobs:
           SDK_DIR="${GITHUB_WORKSPACE}/simplicity_sdk"
           mkdir -p "${SDK_DIR}"
 
-          API_URL="https://api.github.com/repos/${{ github.repository }}/releases?per_page=10"
-          ASSET_URL=$(curl -sL "${API_URL}" | python3 -c "
-import sys, json
-try:
-    releases = json.load(sys.stdin)
-    for rel in releases:
-        for a in rel.get('assets', []):
-            name = a.get('name', '').lower()
-            if 'sdk' in name or 'simplicity' in name:
-                print(a['browser_download_url'])
-                sys.exit(0)
-except Exception as e:
-    pass
-sys.exit(1)
-" 2>/dev/null)
+          ASSET_URL=$(python3 ./scripts/fw_packaging/find_sdk.py "${{ github.repository }}" 2>/dev/null)
 
           if [ -n "${ASSET_URL}" ]; then
             echo "[OK] Found SDK asset, downloading..."
             wget -q --timeout=180 --tries=2 "${ASSET_URL}" -O /tmp/simplicity-sdk.tar.gz 2>&1
             if [ -f /tmp/simplicity-sdk.tar.gz ] && [ -s /tmp/simplicity-sdk.tar.gz ]; then
-                echo "[OK] Downloaded, extracting..."
-                tar xzf /tmp/simplicity-sdk.tar.gz -C "${SDK_DIR}" 2>/dev/null || \
-                tar xf /tmp/simplicity-sdk.tar.gz -C "${SDK_DIR}" 2>/dev/null || \
-                unzip -qo /tmp/simplicity-sdk.tar.gz -d "${SDK_DIR}" 2>/dev/null || true
+              echo "[OK] Downloaded, extracting..."
+              tar xzf /tmp/simplicity-sdk.tar.gz -C "${SDK_DIR}" 2>/dev/null || \
+              tar xf /tmp/simplicity-sdk.tar.gz -C "${SDK_DIR}" 2>/dev/null || \
+              unzip -qo /tmp/simplicity-sdk.tar.gz -d "${SDK_DIR}" 2>/dev/null || true
 
-                SDK_PATH=$(find "${SDK_DIR}" -maxdepth 6 -type d -name "SIMG301" -path "*/Device/SiliconLabs/*" 2>/dev/null | head -1 | sed 's|/devices.*||')
-                [ -z "${SDK_PATH}" ] && SDK_PATH=$(find "${SDK_DIR}" -maxdepth 6 -type d -name "freertos" -path "*/kernel/*" 2>/dev/null | head -1 | sed 's|/freertos/kernel||')
-                [ -z "${SDK_PATH}" ] && SDK_PATH="${SDK_DIR}"
+              SDK_PATH=$(find "${SDK_DIR}" -maxdepth 6 -type d -name "SIMG301" -path "*/Device/SiliconLabs/*" 2>/dev/null | head -1 | sed 's|/devices.*||')
+              [ -z "${SDK_PATH}" ] && SDK_PATH=$(find "${SDK_DIR}" -maxdepth 6 -type d -name "freertos" -path "*/kernel/*" 2>/dev/null | head -1 | sed 's|/freertos/kernel||')
+              [ -z "${SDK_PATH}" ] && SDK_PATH="${SDK_DIR}"
 
-                if [ -d "${SDK_PATH}" ]; then
-                    echo "[OK] SDK extracted to: ${SDK_PATH}"
-                    echo "sdk_path=${SDK_PATH}" >> $GITHUB_OUTPUT
-                    echo "sdk_found=true" >> $GITHUB_OUTPUT
-                else
-                    echo "[WARN] SDK structure invalid"
-                    echo "sdk_found=false" >> $GITHUB_OUTPUT
-                fi
-            else
-                echo "[WARN] Download failed or empty file"
+              if [ -d "${SDK_PATH}" ]; then
+                echo "[OK] SDK extracted to: ${SDK_PATH}"
+                echo "sdk_path=${SDK_PATH}" >> $GITHUB_OUTPUT
+                echo "sdk_found=true" >> $GITHUB_OUTPUT
+              else
+                echo "[WARN] SDK structure invalid"
                 echo "sdk_found=false" >> $GITHUB_OUTPUT
+              fi
+            else
+              echo "[WARN] Download failed or empty file"
+              echo "sdk_found=false" >> $GITHUB_OUTPUT
             fi
           else
             echo "[INFO] No SDK release asset found - will use pre-built artifacts"
