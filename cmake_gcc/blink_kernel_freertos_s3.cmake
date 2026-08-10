@@ -2,7 +2,10 @@
 # Automatically-generated file. Do not edit!                       #
 ####################################################################
 
-set(SDK_PATH "/home/tuya/.silabs/slt/installs/conan/p/simpl965e19baece23/p")
+set(SDK_PATH "$ENV{SILABS_SDK_PATH}" CACHE PATH "Path to Silicon Labs SDK" FORCE)
+if(NOT SDK_PATH)
+  set(SDK_PATH "/home/tuya/.silabs/slt/installs/conan/p/simpl965e19baece23/p" CACHE PATH "Fallback SDK path" FORCE)
+endif()
 set(COPIED_SDK_PATH "simplicity_sdk_2025.12.2")
 set(PKG_PATH "/home/tuya/.silabs/slt/installs")
 

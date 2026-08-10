@@ -32,7 +32,19 @@ runs:
       shell: bash
       run: |
         sudo apt-get update -qq
-        sudo apt-get install -y -qq gcc-arm-none-eabi cmake ninja-build binutils-arm-none-eabi libnewlib-arm-none-eabi python3
+        sudo apt-get install -y -qq gcc-arm-none-eabi cmake ninja-build binutils-arm-none-eabi libnewlib-arm-none-eabi python3 python3-pip
+
+    - name: Install SLC-CLI
+      shell: bash
+      run: |
+        echo "=== Installing SLC-CLI ==="
+        pip3 install --upgrade pip -q
+        pip3 install slc-cli -q
+        if command -v slc &>/dev/null; then
+          echo "[OK] SLC-CLI installed: $(slc --version 2>/dev/null || echo 'version unknown')"
+        else
+          echo "[WARN] SLC-CLI not available, will try alternative SDK installation"
+        fi
 
     - name: Verify toolchain
       shell: bash
@@ -41,6 +53,7 @@ runs:
         echo "CMake:   $(cmake --version | head -1)"
         echo "Ninja:   $(ninja --version)"
         echo "Python:  $(python3 --version)"
+        echo "SLC-CLI: $(slc --version 2>/dev/null || echo 'not available')"
 
     - name: Build firmware
       id: build
@@ -52,7 +65,10 @@ runs:
         BUILD_CONFIG="${{ inputs.build_config }}"
         FAIL_ON_ERROR="${{ inputs.fail_on_error }}"
         PROJECT_NAME="${{ github.event.repository.name }}"
+        OUT_DIR="${WORKSPACE}/artifacts/${PROJECT_NAME}"
+        mkdir -p "${OUT_DIR}"
 
+        # ========== Locate CMake dir ==========
         CMAKE_DIR=""
         if [ -f "${WORKSPACE}/cmake_gcc/CMakePresets.json" ]; then
             CMAKE_DIR="${WORKSPACE}/cmake_gcc"
@@ -61,24 +77,75 @@ runs:
         else
             echo "::error::No CMakePresets.json found"
             echo "success=false" >> $GITHUB_OUTPUT
-            echo "artifacts_dir=${WORKSPACE}/artifacts/${PROJECT_NAME}" >> $GITHUB_OUTPUT
+            echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
             exit 0
         fi
 
-        OUT_DIR="${WORKSPACE}/artifacts/${PROJECT_NAME}"
-        mkdir -p "${OUT_DIR}"
+        # ========== Install SDK via SLC-CLI ==========
+        SDK_DIR="${WORKSPACE}/simplicity_sdk"
+        mkdir -p "${SDK_DIR}"
 
+        echo "=== Installing Silicon Labs SDK ==="
+        SDK_INSTALLED=0
+        for pkg in simplemg301 simg301 simplicity_sdk; do
+          echo "Trying: slc sdk install ${pkg}"
+          if slc sdk install "${pkg}" 2>&1; then
+            echo "[OK] Installed: ${pkg}"
+            SDK_INSTALLED=1
+            break
+          fi
+        done
+        if [ ${SDK_INSTALLED} -eq 0 ]; then
+          echo "[WARN] SLC-CLI install failed, searching..."
+        fi
+
+        # ========== Locate SDK ==========
+        SDK_PATH=""
+        for candidate in \
+            "${SDK_DIR}" \
+            "${HOME}/.slc/sdk" \
+            "${HOME}/.silabs/slt/installs" \
+            "/opt/simplicity-sdk"; do
+            if [ -d "${candidate}" ] && [ -d "${candidate}/devices/platform/Device/SiliconLabs/SIMG301" ]; then
+                SDK_PATH="${candidate}"
+                echo "[OK] Found SDK: ${SDK_PATH}"
+                break
+            fi
+        done
+        if [ -z "${SDK_PATH}" ]; then
+            SDK_PATH=$(find "${HOME}" /opt /usr/share -maxdepth 6 -type d -name "SIMG301" -path "*/Device/SiliconLabs/*" 2>/dev/null | head -1 | sed 's|/devices.*||')
+            [ -n "${SDK_PATH}" ] && echo "[OK] Found SDK: ${SDK_PATH}"
+        fi
+        if [ -z "${SDK_PATH}" ]; then
+            echo "::error::SDK not found. Cannot build."
+            echo "::error::Try: slc sdk install simplemg301"
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
+            if [ "${FAIL_ON_ERROR}" == "true" ]; then
+                exit 1
+            fi
+            exit 0
+        fi
+
+        # ========== Patch CMake file ==========
+        CMAKE_FILE="${CMAKE_DIR}/blink_kernel_freertos_s3.cmake"
+        if [ -f "${CMAKE_FILE}" ]; then
+            cp "${CMAKE_FILE}" "${CMAKE_FILE}.bak"
+            sed -i "s|set(SDK_PATH \"[^\"]*\")|set(SDK_PATH \"${SDK_PATH}\")|" "${CMAKE_FILE}"
+            sed -i "s|set(PKG_PATH \"[^\"]*\")|set(PKG_PATH \"${SDK_PATH}/..\")|" "${CMAKE_FILE}"
+            echo "[OK] Patched CMake with SDK_PATH=${SDK_PATH}"
+        fi
+
+        # ========== Configure ==========
         cd "${CMAKE_DIR}"
-
         export ARM_GCC_DIR="/usr"
         export NINJA_EXE_PATH="/usr/bin/ninja"
+        export SILABS_SDK_PATH="${SDK_PATH}"
 
         echo "=== Configuring CMake ==="
         echo "  Preset:  ${CMAKE_PRESET}"
         echo "  Config:  ${BUILD_CONFIG}"
-        echo "  Source:  ${CMAKE_DIR}"
-        echo "  ARM_GCC_DIR: ${ARM_GCC_DIR}"
-        echo "  NINJA_EXE_PATH: ${NINJA_EXE_PATH}"
+        echo "  SDK:     ${SDK_PATH}"
 
         cmake --preset "${CMAKE_PRESET}" \
               -D"CMAKE_CONFIGURATION_TYPES=${BUILD_CONFIG}" \
@@ -87,11 +154,8 @@ runs:
         CFG_RESULT=$?
 
         BUILD_DIR="${CMAKE_DIR}/build"
-
         if [ ${CFG_RESULT} -ne 0 ] || [ ! -d "${BUILD_DIR}" ]; then
-            echo "::warning::CMake configure failed (exit=${CFG_RESULT})"
-            echo "::warning::This usually means the Silicon Labs SDK is not installed."
-            echo "::warning::The SDK (containing device headers and FreeRTOS sources) is required to build."
+            echo "::error::CMake configure failed (exit=${CFG_RESULT})"
             echo "success=false" >> $GITHUB_OUTPUT
             echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
             if [ "${FAIL_ON_ERROR}" == "true" ]; then
@@ -101,30 +165,28 @@ runs:
             exit 0
         fi
 
-        echo ""
+        # ========== Build ==========
         echo "=== Building ==="
         cmake --build "${BUILD_DIR}" --config "${BUILD_CONFIG}" 2>&1
         BUILD_RESULT=$?
-
         cd "${WORKSPACE}"
 
         if [ ${BUILD_RESULT} -ne 0 ]; then
-            echo "::warning::Build failed with exit code ${BUILD_RESULT}"
+            echo "::error::Build failed (exit=${BUILD_RESULT})"
             echo "success=false" >> $GITHUB_OUTPUT
             echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
             if [ "${FAIL_ON_ERROR}" == "true" ]; then
                 exit 1
             fi
+            cd "${WORKSPACE}"
             exit 0
         fi
+        echo "[OK] Build succeeded"
 
-        FW_DIR="${BUILD_DIR}/${BUILD_CONFIG}"
-        if [ ! -d "${FW_DIR}" ]; then
-            FW_DIR="${BUILD_DIR}"
-        fi
-
-        echo ""
+        # ========== Collect artifacts ==========
         echo "=== Collecting Artifacts ==="
+        FW_DIR="${BUILD_DIR}/${BUILD_CONFIG}"
+        [ ! -d "${FW_DIR}" ] && FW_DIR="${BUILD_DIR}"
         copied=0
         for ext in .bin .hex .s37 .map .out; do
             src="${FW_DIR}/${PROJECT_NAME}${ext}"
@@ -135,11 +197,11 @@ runs:
                 copied=$((copied + 1))
             fi
         done
-
         if [ ${copied} -eq 0 ]; then
             echo "::warning::No firmware artifacts found"
             echo "success=false" >> $GITHUB_OUTPUT
         else
+            echo "[OK] Collected ${copied} artifact(s)"
             echo "success=true" >> $GITHUB_OUTPUT
         fi
         echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
@@ -147,4 +209,5 @@ runs:
         echo ""
         echo "=== Build Summary ==="
         echo "Result: $([ ${copied} -gt 0 ] && echo 'SUCCESS' || echo 'NO ARTIFACTS')"
-        echo "Artifacts: ${OUT_DIR}/"
+        echo "SDK:    ${SDK_PATH}"
+        echo "Output: ${OUT_DIR}/"
