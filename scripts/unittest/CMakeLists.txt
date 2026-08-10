@@ -1,0 +1,60 @@
+project(blink_kernel_freertos_s3_unittest LANGUAGES C)
+cmake_minimum_required(VERSION 3.10.2)
+include(FindPkgConfig)
+include(CMakePackageConfigHelpers)
+
+message("ROOT_DIR=${ROOT_DIR}")
+
+set(THIRD_PARTY ${ROOT_DIR}/third_party CACHE STRING "Third party path")
+
+SET(GCC_COVERAGE_COMPILE_FLAGS "-fprofile-arcs -ftest-coverage")
+SET(GCC_COVERAGE_LINK_FLAGS    "-lgcov")
+SET(CMAKE_C_FLAGS  "${CMAKE_C_FLAGS} ${GCC_COVERAGE_COMPILE_FLAGS}")
+SET(CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} ${GCC_COVERAGE_LINK_FLAGS}")
+
+SET(GCC_UNITTEST_COMPILE_FLAGS "-w")
+SET(CMAKE_C_FLAGS  "${CMAKE_C_FLAGS} ${GCC_UNITTEST_COMPILE_FLAGS}")
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(CMOCKA REQUIRED IMPORTED_TARGET cmocka)
+list(APPEND CMAKE_MODULE_PATH "${THIRD_PARTY}/cmocka/cmake/Modules")
+include(AddCMockaTest)
+
+set(TEST_DIRS
+    ${ROOT_DIR}
+)
+
+MACRO(FIND_TEST_DIRECTORIES return_list subdir)
+    FILE(GLOB_RECURSE new_list LIST_DIRECTORIES true ${subdir}/*/test/*)
+    SET(dir_list "")
+    FOREACH(file_path ${new_list})
+        GET_FILENAME_COMPONENT(dir_path ${file_path} PATH)
+        if(IS_DIRECTORY ${dir_path} AND EXISTS ${dir_path}/CMakeLists.txt)
+            SET(dir_list ${dir_list} ${dir_path})
+        endif()
+    ENDFOREACH()
+    LIST(REMOVE_DUPLICATES dir_list)
+    SET(${return_list} ${dir_list})
+ENDMACRO()
+
+foreach(subdir ${TEST_DIRS})
+    if(IS_DIRECTORY ${subdir})
+        SET(test_list "")
+        FIND_TEST_DIRECTORIES(test_list ${subdir})
+        foreach(testfile ${test_list})
+            SET(test_found true)
+            string(REPLACE "/" ";" TEST_PATH_LIST ${testfile})
+            list(LENGTH TEST_PATH_LIST len)
+            MATH(EXPR len "${len}-2")
+            list(GET TEST_PATH_LIST ${len} TEST_NAME)
+
+            if(NOT ${FILTER} STREQUAL "")
+                string(COMPARE EQUAL ${TEST_NAME} ${FILTER} test_found)
+            endif()
+            if(test_found)
+                MESSAGE(STATUS "Including unittest dir ${testfile} ${TEST_NAME}")
+                add_subdirectory(${testfile} ${TEST_NAME})
+            endif()
+        endforeach()
+    endif()
+endforeach()

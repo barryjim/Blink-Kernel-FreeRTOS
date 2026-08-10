@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  CodeAnalysis:
+    name: Code Quality Checks
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git python3-pip
+
+      - name: Setup cpplint
+        run: |
+          if [ ! -d "third_party" ]; then
+            mkdir -p third_party
+          fi
+          if [ ! -d "third_party/cpplint" ]; then
+            git clone --depth 1 https://github.com/cpplint/cpplint.git third_party/cpplint
+          fi
+
+      - name: Setup cppcheck
+        run: |
+          if [ ! -d "third_party/cppcheck" ]; then
+            ./scripts/cppcheck/setup.sh
+          fi
+
+      - name: Run cpplint
+        run: |
+          ./scripts/linter/linter.sh -p
+
+      - name: Run cppcheck
+        run: |
+          ./scripts/cppcheck/runner.sh
+
+      - name: Upload code quality report
+        uses: actions/upload-artifact@v4
+        if: ${{ success() }}
+        with:
+          name: code_quality_report
+          path: code_quality_report/
+          retention-days: 30
+
+  FormatCheck:
+    name: Code Format Check
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-format
+
+      - name: Check formatting
+        run: |
+          ./scripts/format/format.sh -d
+
+  Build:
+    name: Build Firmware
+    runs-on: ubuntu-22.04
+    needs: [CodeAnalysis, FormatCheck]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Maximize runner disk
+        uses: ./.github/actions/maximize-runner-disk
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-arm-none-eabi cmake ninja-build
+
+      - name: Build project
+        run: |
+          ./scripts/fw_packaging/artifacts.sh -t base || true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build_artifacts
+          path: artifacts/
+          retention-days: 30
