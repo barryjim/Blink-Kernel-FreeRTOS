@@ -47,7 +47,13 @@ build:
     - .map
 
 ci:
-  image: ghcr.io/silabs-software/slc-build:latest
+  # NOTE: Silicon Labs does not distribute an official public Docker image.
+  # The build runs directly on the GitHub-provided ubuntu runner.
+  # Required tools (cmake, ninja, arm-none-eabi-gcc) are installed via apt.
+  # The Silicon Labs SDK must be provided separately:
+  #   Option 1 - Upload the SDK tarball as a GitHub Release asset named '*sdk*'
+  #   Option 2 - Build locally with Simplicity Studio and commit the artifacts
+  runner: ubuntu-22.04
   tools:
     - cmake
     - ninja

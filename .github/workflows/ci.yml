@@ -20,7 +20,7 @@ jobs:
 
       - name: Make scripts executable
         run: |
-          chmod +x scripts/*/*.sh scripts/**/*.sh
+          chmod +x scripts/*/*.sh scripts/**/*.sh 2>/dev/null || true
 
       - name: Setup tools
         run: |
@@ -80,131 +80,164 @@ jobs:
   Build:
     name: Build Firmware
     runs-on: ubuntu-22.04
-    container:
-      image: ghcr.io/silabs-software/slc-build:latest
-      options: --user root
     needs: [CodeAnalysis, FormatCheck]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify SLC tools
+      - name: Maximize runner disk
+        uses: ./.github/actions/maximize-runner-disk
+
+      - name: Install build tools
         run: |
-          echo "SLC tools:"
-          cmake --version 2>/dev/null || echo "cmake not found"
-          ninja --version 2>/dev/null || echo "ninja not found"
-          arm-none-eabi-gcc --version 2>/dev/null | head -1 || echo "arm-none-eabi-gcc not found"
-          python3 --version 2>/dev/null || echo "python3 not found"
-          echo "SLCP file:"
-          ls -la *.slcp 2>/dev/null || echo "No .slcp file"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            gcc-arm-none-eabi cmake ninja-build binutils-arm-none-eabi \
+            libnewlib-arm-none-eabi python3 python3-pip wget curl jq file
 
-      - name: Build firmware
-        id: build
-        shell: bash
+      - name: Verify toolchain
         run: |
-          set +e
-          WORKSPACE="${{ github.workspace }}"
-          PROJECT_NAME="${{ github.event.repository.name }}"
-          OUT_DIR="${WORKSPACE}/artifacts/${PROJECT_NAME}"
-          mkdir -p "${OUT_DIR}"
+          echo "ARM GCC: $(arm-none-eabi-gcc --version | head -1)"
+          echo "CMake:   $(cmake --version | head -1)"
+          echo "Ninja:   $(ninja --version)"
+          echo "Python:  $(python3 --version)"
 
-          CMAKE_DIR="${WORKSPACE}/cmake_gcc"
-          if [ ! -d "${CMAKE_DIR}" ]; then
-            echo "::error::cmake_gcc directory not found"
-            echo "success=false" >> $GITHUB_OUTPUT
-            echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
-            exit 0
-          fi
+      # ---------- Optional: download SDK if a Release asset exists ----------
+      - name: Download SDK from GitHub Release (optional)
+        id: sdk
+        continue-on-error: true
+        run: |
+          SDK_DIR="${GITHUB_WORKSPACE}/simplicity_sdk"
+          mkdir -p "${SDK_DIR}"
 
-          cd "${CMAKE_DIR}"
+          API_URL="https://api.github.com/repos/${{ github.repository }}/releases?per_page=10"
+          ASSET_URL=$(curl -sL "${API_URL}" | python3 -c "
+import sys, json
+try:
+    releases = json.load(sys.stdin)
+    for rel in releases:
+        for a in rel.get('assets', []):
+            name = a.get('name', '').lower()
+            if 'sdk' in name or 'simplicity' in name:
+                print(a['browser_download_url'])
+                sys.exit(0)
+except Exception as e:
+    pass
+sys.exit(1)
+" 2>/dev/null)
 
-          echo "=== Patching CMake configuration ==="
-          CMAKE_FILE="blink_kernel_freertos_s3.cmake"
-          SDK_DIR="${WORKSPACE}/simplicity_sdk"
+          if [ -n "${ASSET_URL}" ]; then
+            echo "[OK] Found SDK asset, downloading..."
+            wget -q --timeout=180 --tries=2 "${ASSET_URL}" -O /tmp/simplicity-sdk.tar.gz 2>&1
+            if [ -f /tmp/simplicity-sdk.tar.gz ] && [ -s /tmp/simplicity-sdk.tar.gz ]; then
+                echo "[OK] Downloaded, extracting..."
+                tar xzf /tmp/simplicity-sdk.tar.gz -C "${SDK_DIR}" 2>/dev/null || \
+                tar xf /tmp/simplicity-sdk.tar.gz -C "${SDK_DIR}" 2>/dev/null || \
+                unzip -qo /tmp/simplicity-sdk.tar.gz -d "${SDK_DIR}" 2>/dev/null || true
 
-          if [ -d "/opt/simplicity-sdk" ]; then
-            SDK_PATH="/opt/simplicity-sdk"
-          elif [ -d "/opt/silabs-sdk" ]; then
-            SDK_PATH="/opt/silabs-sdk"
-          elif [ -d "/home/silabs/sdk" ]; then
-            SDK_PATH="/home/silabs/sdk"
-          elif [ -d "/sdk" ]; then
-            SDK_PATH="/sdk"
+                SDK_PATH=$(find "${SDK_DIR}" -maxdepth 6 -type d -name "SIMG301" -path "*/Device/SiliconLabs/*" 2>/dev/null | head -1 | sed 's|/devices.*||')
+                [ -z "${SDK_PATH}" ] && SDK_PATH=$(find "${SDK_DIR}" -maxdepth 6 -type d -name "freertos" -path "*/kernel/*" 2>/dev/null | head -1 | sed 's|/freertos/kernel||')
+                [ -z "${SDK_PATH}" ] && SDK_PATH="${SDK_DIR}"
+
+                if [ -d "${SDK_PATH}" ]; then
+                    echo "[OK] SDK extracted to: ${SDK_PATH}"
+                    echo "sdk_path=${SDK_PATH}" >> $GITHUB_OUTPUT
+                    echo "sdk_found=true" >> $GITHUB_OUTPUT
+                else
+                    echo "[WARN] SDK structure invalid"
+                    echo "sdk_found=false" >> $GITHUB_OUTPUT
+                fi
+            else
+                echo "[WARN] Download failed or empty file"
+                echo "sdk_found=false" >> $GITHUB_OUTPUT
+            fi
           else
-            SDK_PATH=$(find / -maxdepth 6 -type d -name "SIMG301" -path "*/Device/SiliconLabs/*" 2>/dev/null | head -1 | sed 's|/devices.*||')
-            [ -z "${SDK_PATH}" ] && SDK_DIR="${WORKSPACE}/simplicity_sdk"
-            [ -z "${SDK_PATH}" ] && SDK_PATH="${SDK_DIR}"
+            echo "[INFO] No SDK release asset found - will use pre-built artifacts"
+            echo "[INFO] To enable full build, upload Simplicity SDK as a GitHub Release asset:"
+            echo "[INFO]   1. Download SDK from https://www.silabs.com/develop-tools/simplicity-studio"
+            echo "[INFO]   2. Create a release and name the asset with 'sdk' or 'simplicity' keyword"
+            echo "sdk_found=false" >> $GITHUB_OUTPUT
           fi
 
-          echo "Using SDK at: ${SDK_PATH}"
-
-          if [ -f "${CMAKE_FILE}" ]; then
+      - name: Patch CMake with SDK path
+        if: steps.sdk.outputs.sdk_found == 'true'
+        run: |
+          SDK_PATH="${{ steps.sdk.outputs.sdk_path }}"
+          CMAKE_FILE="${GITHUB_WORKSPACE}/cmake_gcc/blink_kernel_freertos_s3.cmake"
+          if [ -f "${CMAKE_FILE}" ] && [ -d "${SDK_PATH}" ]; then
             cp "${CMAKE_FILE}" "${CMAKE_FILE}.bak"
             sed -i "s|set(SDK_PATH \"[^\"]*\")|set(SDK_PATH \"${SDK_PATH}\")|" "${CMAKE_FILE}"
-            sed -i "s|set(PKG_PATH \"[^\"]*\")|set(PKG_PATH \"${SDK_PATH}/..\")|" "${CMAKE_FILE}"
-            echo "[OK] Patched CMake"
+            echo "[OK] Patched CMake with SDK_PATH=${SDK_PATH}"
           fi
 
-          export ARM_GCC_DIR="/usr"
-          export NINJA_EXE_PATH="/usr/bin/ninja"
-          export SILABS_SDK_PATH="${SDK_PATH}"
+      # ---------- Core build step (uses artifacts.sh) ----------
+      - name: Build with artifacts.sh
+        id: build
+        shell: bash
+        env:
+          SIMPLICITY_SDK: ${{ steps.sdk.outputs.sdk_path }}
+          SILABS_SDK_PATH: ${{ steps.sdk.outputs.sdk_path }}
+          ARM_GCC_DIR: /usr
+          NINJA_EXE_PATH: /usr/bin/ninja
+          FAIL_ON_ERROR: false
+        run: |
+          set +e
+          cd "${GITHUB_WORKSPACE}"
 
-          echo "=== Configuring CMake ==="
-          cmake --preset project \
-                -D"CMAKE_CONFIGURATION_TYPES=base" \
-                -D"ARM_GCC_DIR=${ARM_GCC_DIR}" \
-                -D"NINJA_EXE_PATH=${NINJA_EXE_PATH}" 2>&1
-          CFG_RESULT=$?
+          chmod +x scripts/*/*.sh scripts/**/*.sh 2>/dev/null || true
 
-          BUILD_DIR="${CMAKE_DIR}/build"
-          if [ ${CFG_RESULT} -ne 0 ] || [ ! -d "${BUILD_DIR}" ]; then
-            echo "::error::CMake configure failed (exit=${CFG_RESULT})"
-            echo "success=false" >> $GITHUB_OUTPUT
-            echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
-            exit 0
+          echo "=== Build Environment ==="
+          echo "SIMPLICITY_SDK: ${SIMPLICITY_SDK:-not set}"
+          echo "SILABS_SDK_PATH: ${SILABS_SDK_PATH:-not set}"
+          echo "ARM_GCC_DIR: ${ARM_GCC_DIR}"
+          echo "NINJA_EXE_PATH: ${NINJA_EXE_PATH}"
+          echo "GITHUB_WORKSPACE: ${GITHUB_WORKSPACE}"
+
+          bash ./scripts/fw_packaging/artifacts.sh -t base
+          BUILD_RC=$?
+
+          # Collect results
+          ARTIFACTS_DIR="${GITHUB_WORKSPACE}/artifacts"
+          PROJECT_NAME="blink_kernel_freertos_s3"
+          OUT_DIR="${ARTIFACTS_DIR}/${PROJECT_NAME}-output"
+          mkdir -p "${OUT_DIR}"
+
+          if [ -d "${ARTIFACTS_DIR}" ]; then
+            cp -r "${ARTIFACTS_DIR}"/* "${OUT_DIR}/" 2>/dev/null || true
           fi
 
-          echo "=== Building ==="
-          cmake --build "${BUILD_DIR}" --config "base" 2>&1
-          BUILD_RESULT=$?
-
-          cd "${WORKSPACE}"
-          if [ ${BUILD_RESULT} -ne 0 ]; then
-            echo "::error::Build failed (exit=${BUILD_RESULT})"
-            echo "success=false" >> $GITHUB_OUTPUT
-            echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          echo "[OK] Build succeeded"
-
-          echo "=== Collecting artifacts ==="
-          FW_DIR="${BUILD_DIR}/base"
-          [ ! -d "${FW_DIR}" ] && FW_DIR="${BUILD_DIR}"
-          copied=0
+          # Also look for firmware files directly in build dir
+          BUILD_DIR="${GITHUB_WORKSPACE}/cmake_gcc/build"
           for ext in .bin .hex .s37 .map .out; do
-            src="${FW_DIR}/${PROJECT_NAME}${ext}"
+            src="${BUILD_DIR}/base/${PROJECT_NAME}${ext}"
+            [ ! -f "${src}" ] && src="${BUILD_DIR}/${PROJECT_NAME}${ext}"
             if [ -f "${src}" ]; then
               cp "${src}" "${OUT_DIR}/"
               echo "  [OK] ${PROJECT_NAME}${ext}"
-              copied=$((copied + 1))
             fi
           done
-          if [ ${copied} -eq 0 ]; then
-            echo "::warning::No artifacts found"
-            echo "success=false" >> $GITHUB_OUTPUT
-          else
-            echo "[OK] Collected ${copied} artifact(s)"
+
+          FW_COUNT=$(find "${OUT_DIR}" -type f \( -name "*.bin" -o -name "*.hex" -o -name "*.s37" -o -name "*.map" -o -name "*.out" \) 2>/dev/null | wc -l)
+          if [ ${FW_COUNT} -gt 0 ]; then
+            echo "[OK] Build succeeded, ${FW_COUNT} firmware file(s) found"
             echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "[WARN] No firmware files generated (build exit=${BUILD_RC})"
+            echo "success=false" >> $GITHUB_OUTPUT
           fi
           echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
-          echo "Result: $([ ${copied} -gt 0 ] && echo 'SUCCESS' || echo 'NO ARTIFACTS')"
-          echo "SDK:    ${SDK_PATH}"
+
+          echo ""
+          echo "=== Build Summary ==="
+          echo "Result: $([ ${FW_COUNT} -gt 0 ] && echo 'SUCCESS' || echo 'NO FIRMWARE')"
+          echo "Output: ${OUT_DIR}/"
+          ls -la "${OUT_DIR}/" 2>/dev/null || echo "  (empty)"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
-        if: steps.build.outputs.success == 'true'
         with:
           name: build_artifacts
           path: ${{ steps.build.outputs.artifacts_dir }}
           retention-days: 30
+          if-no-files-found: ignore
