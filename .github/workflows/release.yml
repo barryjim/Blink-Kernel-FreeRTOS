@@ -20,6 +20,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Maximize runner disk
+        uses: ./.github/actions/maximize-runner-disk
+
       - name: Make scripts executable
         run: |
           chmod +x scripts/*/*.sh scripts/**/*.sh
@@ -58,15 +61,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Make scripts executable
-        run: |
-          chmod +x scripts/*/*.sh scripts/**/*.sh
-
-      - name: Install toolchain
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq gcc-arm-none-eabi cmake ninja-build
-
       - name: Determine tag version
         id: version
         run: |
@@ -76,27 +70,23 @@ jobs:
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "Release version: ${VERSION} from tag: ${TAG}"
 
-      - name: Build (best effort)
+      - name: Build firmware
         id: build
-        run: |
-          set +e
-          bash ./scripts/fw_packaging/artifacts.sh -t base
-          if [ -f "artifacts/artifacts.tar.gz" ] && [ -s "artifacts/artifacts.tar.gz" ]; then
-            echo "build_success=true" >> $GITHUB_OUTPUT
-          else
-            echo "build_success=false" >> $GITHUB_OUTPUT
-            echo "::warning::Build requires Silicon Labs Simplicity Studio SDK. Skipping build on GitHub Actions."
-          fi
+        uses: ./.github/actions/build-firmware
+        with:
+          cmake_preset: project
+          build_config: base
+          fail_on_error: false
 
       - name: Prepare release assets
         run: |
-          cd artifacts
-          if [ -f "artifacts.tar.gz" ] && [ -s "artifacts.tar.gz" ]; then
+          if [ "${{ steps.build.outputs.success }}" == "true" ]; then
             echo "Build artifacts ready for release."
+            ARTIFACTS_DIR="${{ steps.build.outputs.artifacts_dir }}"
+            tar -zcvf artifacts.tar.gz -C "$(dirname ${ARTIFACTS_DIR})" "$(basename ${ARTIFACTS_DIR})"
           else
-            echo "No build artifacts - SDK not available on GitHub Actions."
-            echo "Build locally with Simplicity Studio and upload firmware files to the release."
-            echo "Release created with code quality reports only."
+            echo "::warning::Build requires Silicon Labs SDK. No firmware artifacts generated."
+            echo "Build locally with Simplicity Studio and upload firmware to the release."
             touch artifacts.tar.gz
           fi
 
@@ -104,7 +94,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release_artifacts
-          path: artifacts/artifacts.tar.gz
+          path: artifacts.tar.gz
           retention-days: 90
 
   Release:

@@ -1,0 +1,39 @@
+name: 'Embedded Firmware Builder'
+description: 'Build embedded firmware for Silicon Labs MG301 series with ARM GCC cross-compiler'
+inputs:
+  cmake_preset:
+    description: 'CMake preset name (defined in CMakePresets.json)'
+    required: false
+    default: 'project'
+  build_config:
+    description: 'Build configuration (e.g., base, debug, release)'
+    required: false
+    default: 'base'
+  sdk_path:
+    description: 'Path to Silicon Labs SDK (mounted or pre-installed). If empty, expects SDK at /opt/simplicity-sdk'
+    required: false
+    default: ''
+  timeout:
+    description: 'Build timeout in minutes'
+    required: false
+    default: '10'
+  fail_on_error:
+    description: 'Fail the workflow if build fails'
+    required: false
+    default: 'false'
+
+outputs:
+  success:
+    description: 'Build result (true/false)'
+    value: ${{ steps.build.outputs.success }}
+  artifacts_dir:
+    description: 'Path to the built artifacts directory'
+    value: ${{ steps.build.outputs.artifacts_dir }}
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+
+branding:
+  icon: 'cpu'
+  color: 'blue'

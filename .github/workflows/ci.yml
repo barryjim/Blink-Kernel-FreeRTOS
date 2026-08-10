@@ -15,6 +15,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Maximize runner disk
+        uses: ./.github/actions/maximize-runner-disk
+
       - name: Make scripts executable
         run: |
           chmod +x scripts/*/*.sh scripts/**/*.sh
@@ -62,6 +65,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Maximize runner disk
+        uses: ./.github/actions/maximize-runner-disk
+
       - name: Install clang-format
         run: |
           sudo apt-get update -qq
@@ -70,3 +76,28 @@ jobs:
       - name: Check formatting
         run: |
           bash ./scripts/format/format.sh -d
+
+  Build:
+    name: Build Firmware
+    runs-on: ubuntu-22.04
+    needs: [CodeAnalysis, FormatCheck]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build firmware
+        id: build
+        uses: ./.github/actions/build-firmware
+        with:
+          cmake_preset: project
+          build_config: base
+          fail_on_error: false
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        if: steps.build.outputs.success == 'true'
+        with:
+          name: build_artifacts
+          path: ${{ steps.build.outputs.artifacts_dir }}
+          retention-days: 30

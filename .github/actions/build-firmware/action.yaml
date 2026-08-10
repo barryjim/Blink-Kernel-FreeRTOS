@@ -1,0 +1,150 @@
+name: 'Embedded Firmware Builder (Composite)'
+description: 'Build embedded firmware using ARM GCC cross-compiler.'
+inputs:
+  cmake_preset:
+    description: 'CMake preset name (defined in CMakePresets.json)'
+    required: false
+    default: 'project'
+  build_config:
+    description: 'Build configuration (e.g., base, debug, release)'
+    required: false
+    default: 'base'
+  fail_on_error:
+    description: 'Fail the workflow if build fails'
+    required: false
+    default: 'false'
+
+outputs:
+  success:
+    description: 'Build result (true/false)'
+    value: ${{ steps.build.outputs.success }}
+  artifacts_dir:
+    description: 'Path to the built artifacts directory'
+    value: ${{ steps.build.outputs.artifacts_dir }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Maximize runner disk space
+      uses: ./.github/actions/maximize-runner-disk
+
+    - name: Install build tools
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq gcc-arm-none-eabi cmake ninja-build binutils-arm-none-eabi libnewlib-arm-none-eabi python3
+
+    - name: Verify toolchain
+      shell: bash
+      run: |
+        echo "ARM GCC: $(arm-none-eabi-gcc --version | head -1)"
+        echo "CMake:   $(cmake --version | head -1)"
+        echo "Ninja:   $(ninja --version)"
+        echo "Python:  $(python3 --version)"
+
+    - name: Build firmware
+      id: build
+      shell: bash
+      run: |
+        set +e
+        WORKSPACE="${{ github.workspace }}"
+        CMAKE_PRESET="${{ inputs.cmake_preset }}"
+        BUILD_CONFIG="${{ inputs.build_config }}"
+        FAIL_ON_ERROR="${{ inputs.fail_on_error }}"
+        PROJECT_NAME="${{ github.event.repository.name }}"
+
+        CMAKE_DIR=""
+        if [ -f "${WORKSPACE}/cmake_gcc/CMakePresets.json" ]; then
+            CMAKE_DIR="${WORKSPACE}/cmake_gcc"
+        elif [ -f "${WORKSPACE}/CMakePresets.json" ]; then
+            CMAKE_DIR="${WORKSPACE}"
+        else
+            echo "::error::No CMakePresets.json found"
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "artifacts_dir=${WORKSPACE}/artifacts/${PROJECT_NAME}" >> $GITHUB_OUTPUT
+            exit 0
+        fi
+
+        OUT_DIR="${WORKSPACE}/artifacts/${PROJECT_NAME}"
+        mkdir -p "${OUT_DIR}"
+
+        cd "${CMAKE_DIR}"
+
+        export ARM_GCC_DIR="/usr"
+        export NINJA_EXE_PATH="/usr/bin/ninja"
+
+        echo "=== Configuring CMake ==="
+        echo "  Preset:  ${CMAKE_PRESET}"
+        echo "  Config:  ${BUILD_CONFIG}"
+        echo "  Source:  ${CMAKE_DIR}"
+        echo "  ARM_GCC_DIR: ${ARM_GCC_DIR}"
+        echo "  NINJA_EXE_PATH: ${NINJA_EXE_PATH}"
+
+        cmake --preset "${CMAKE_PRESET}" \
+              -D"CMAKE_CONFIGURATION_TYPES=${BUILD_CONFIG}" \
+              -D"ARM_GCC_DIR=${ARM_GCC_DIR}" \
+              -D"NINJA_EXE_PATH=${NINJA_EXE_PATH}" 2>&1
+        CFG_RESULT=$?
+
+        BUILD_DIR="${CMAKE_DIR}/build"
+
+        if [ ${CFG_RESULT} -ne 0 ] || [ ! -d "${BUILD_DIR}" ]; then
+            echo "::warning::CMake configure failed (exit=${CFG_RESULT})"
+            echo "::warning::This usually means the Silicon Labs SDK is not installed."
+            echo "::warning::The SDK (containing device headers and FreeRTOS sources) is required to build."
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
+            if [ "${FAIL_ON_ERROR}" == "true" ]; then
+                exit 1
+            fi
+            cd "${WORKSPACE}"
+            exit 0
+        fi
+
+        echo ""
+        echo "=== Building ==="
+        cmake --build "${BUILD_DIR}" --config "${BUILD_CONFIG}" 2>&1
+        BUILD_RESULT=$?
+
+        cd "${WORKSPACE}"
+
+        if [ ${BUILD_RESULT} -ne 0 ]; then
+            echo "::warning::Build failed with exit code ${BUILD_RESULT}"
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
+            if [ "${FAIL_ON_ERROR}" == "true" ]; then
+                exit 1
+            fi
+            exit 0
+        fi
+
+        FW_DIR="${BUILD_DIR}/${BUILD_CONFIG}"
+        if [ ! -d "${FW_DIR}" ]; then
+            FW_DIR="${BUILD_DIR}"
+        fi
+
+        echo ""
+        echo "=== Collecting Artifacts ==="
+        copied=0
+        for ext in .bin .hex .s37 .map .out; do
+            src="${FW_DIR}/${PROJECT_NAME}${ext}"
+            if [ -f "${src}" ]; then
+                cp "${src}" "${OUT_DIR}/"
+                size=$(stat --format=%s "${src}" 2>/dev/null || echo "?")
+                echo "  [OK] ${PROJECT_NAME}${ext} (${size} bytes)"
+                copied=$((copied + 1))
+            fi
+        done
+
+        if [ ${copied} -eq 0 ]; then
+            echo "::warning::No firmware artifacts found"
+            echo "success=false" >> $GITHUB_OUTPUT
+        else
+            echo "success=true" >> $GITHUB_OUTPUT
+        fi
+        echo "artifacts_dir=${OUT_DIR}" >> $GITHUB_OUTPUT
+
+        echo ""
+        echo "=== Build Summary ==="
+        echo "Result: $([ ${copied} -gt 0 ] && echo 'SUCCESS' || echo 'NO ARTIFACTS')"
+        echo "Artifacts: ${OUT_DIR}/"
