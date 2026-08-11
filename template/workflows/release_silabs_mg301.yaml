@@ -1,0 +1,17 @@
+name: Release-Silabs-MG301
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'silabs_mg301-*'
+
+jobs:
+  Release:
+    uses: ./.github/workflows/release_template.yaml
+    with:
+      ref: silabs_mg301_langdmatt
+      platform: silabs_mg301
+      enable_code_analysis: true
+      enable_unit_test: false
+      build_test_upgrade: false
