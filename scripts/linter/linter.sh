@@ -73,13 +73,10 @@ pushd "$PWD" > /dev/null 2>&1
             pattern_args+=(-o -name "$pattern")
         done
 
-        CPPLINT_ARGS="--filter=-whitespace/indent,-readability/alt_tokens,-build/include_subdir,-whitespace/braces,-build/include_order,-build/include_alpha"
-        CPPLINT_ARGS="${CPPLINT_ARGS} --linelength=100"
-
         if [ "${PACKAGING_REPORT}" == 0 ]; then
-            find . "${exclude_args[@]}" '(' "${pattern_args[@]:1}" ')' -type f -exec ./third_party/cpplint/cpplint.py ${CPPLINT_ARGS} {} +
+            find . "${exclude_args[@]}" '(' "${pattern_args[@]:1}" ')' -type f -print0 | xargs -0 -r ./third_party/cpplint/cpplint.py
         else
-            find . "${exclude_args[@]}" '(' "${pattern_args[@]:1}" ')' -type f -exec ./third_party/cpplint/cpplint.py ${CPPLINT_ARGS} --output=junit {} + > ${CPPLINT_REPORT_PATH}/cpplint_report.xml
+            find . "${exclude_args[@]}" '(' "${pattern_args[@]:1}" ')' -type f -print0 | xargs -0 -r ./third_party/cpplint/cpplint.py --output-format=junit-xml > ${CPPLINT_REPORT_PATH}/cpplint_report.xml
             echo "Cpplint report saved to ${CPPLINT_REPORT_PATH}/cpplint_report.xml"
         fi
     fi
