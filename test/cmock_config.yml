@@ -1,0 +1,27 @@
+cmock:
+  :mock_prefix: Mock
+  :when_no_prototypes: :warn
+  :enforce_strict_ordering: false
+  :plugins:
+    - :ignore
+    - :ignore_arg
+    - :callback
+    - :expect_any_args
+    - :return_thru_ptr
+  :treat_as:
+    uint8:    UINT8
+    uint16:   UINT16
+    uint32:   UINT32
+    uint64:   UINT64
+    int8:     INT8
+    bool:     BOOL
+  :treat_as_array:
+    - UBaseType_t
+    - StackType_t
+    - configSTACK_DEPTH_TYPE
+  :include:
+    - FreeRTOS.h
+
+unity:
+  :framework_path: "Unity"
+  :helper_path: "Unity/unity"

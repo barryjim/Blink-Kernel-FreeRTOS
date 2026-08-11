@@ -77,6 +77,27 @@ jobs:
         run: |
           bash ./scripts/format/format.sh -d
 
+  UnitTest:
+    name: Unit Tests
+    needs: FormatCheck
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential
+
+      - name: Run unit tests (static allocation)
+        run: |
+          cd test && make test
+
+      - name: Run unit tests (dynamic allocation)
+        run: |
+          cd test && make test_dynamic
+
   ArtifactCheck:
     name: Verify Prebuilt Artifacts
     runs-on: ubuntu-22.04
