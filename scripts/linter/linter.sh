@@ -74,9 +74,9 @@ pushd "$PWD" > /dev/null 2>&1
         done
 
         if [ "${PACKAGING_REPORT}" == 0 ]; then
-            find . "${exclude_args[@]}" '(' "${pattern_args[@]:1}" ')' -type f -print0 | xargs -0 -r ./third_party/cpplint/cpplint.py --
+            find . "${exclude_args[@]}" '(' "${pattern_args[@]:1}" ')' -type f -print0 | xargs -0 -r ./third_party/cpplint/cpplint.py
         else
-            find . "${exclude_args[@]}" '(' "${pattern_args[@]:1}" ')' -type f -print0 | xargs -0 -r ./third_party/cpplint/cpplint.py --output-format=junit-xml -- > ${CPPLINT_REPORT_PATH}/cpplint_report.xml
+            find . "${exclude_args[@]}" '(' "${pattern_args[@]:1}" ')' -type f -print0 | xargs -0 -r ./third_party/cpplint/cpplint.py --output-format=junit-xml > ${CPPLINT_REPORT_PATH}/cpplint_report.xml
             echo "Cpplint report saved to ${CPPLINT_REPORT_PATH}/cpplint_report.xml"
         fi
     fi
