@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - 'blink_kernel_freertos_s3-v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name (e.g., v1.0.1)'
+        required: false
+        type: string
+
+jobs:
+  Package:
+    name: Package Prebuilt Firmware
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag_name }}}"
+          VERSION=$(echo "$TAG" | sed 's/^v//' | sed 's/^blink_kernel_freertos_s3-//')
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Release version: ${VERSION} from tag: ${TAG}"
+
+      - name: Verify prebuilt firmware
+        run: |
+          PROJECT_NAME="blink_kernel_freertos_s3"
+          FW_COUNT=0
+          for ext in bin hex s37 map out; do
+            f="prebuilt/${PROJECT_NAME}.${ext}"
+            if [ -f "$f" ]; then
+              echo "  [OK] $f ($(stat --format=%s "$f") bytes)"
+              FW_COUNT=$((FW_COUNT + 1))
+            fi
+          done
+          if [ $FW_COUNT -eq 0 ]; then
+            echo "::error::No firmware files found in prebuilt/"
+            echo "  Build firmware locally with Simplicity Studio, then run:"
+            echo "    bash scripts/fw_packaging/artifacts.sh --sync"
+            echo "    git add prebuilt/ && git commit && git push"
+            exit 1
+          fi
+          echo "Found ${FW_COUNT} firmware files in prebuilt/"
+
+      - name: Create release archive
+        id: archive
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          PROJECT_NAME="blink_kernel_freertos_s3"
+          ARCHIVE_NAME="${PROJECT_NAME}-${VERSION}.tar.gz"
+          ARCHIVE_PATH="${GITHUB_WORKSPACE}/${ARCHIVE_NAME}"
+
+          echo "Creating ${ARCHIVE_NAME} from prebuilt/ ..."
+
+          cd prebuilt
+          FILES=""
+          for ext in bin hex s37 map out; do
+            f="${PROJECT_NAME}.${ext}"
+            [ -f "$f" ] && FILES="$FILES $f"
+          done
+
+          if [ -z "$FILES" ]; then
+            echo "::error::No firmware files in prebuilt/"
+            exit 1
+          fi
+
+          echo "Files to archive:$FILES"
+          tar -zcvf "${ARCHIVE_PATH}" $FILES
+          cd "${GITHUB_WORKSPACE}"
+
+          if [ ! -f "${ARCHIVE_PATH}" ] || [ ! -s "${ARCHIVE_PATH}" ]; then
+            echo "::error::Failed to create archive"
+            exit 1
+          fi
+
+          echo "[OK] Created ${ARCHIVE_NAME} ($(du -h "${ARCHIVE_PATH}" | cut -f1))"
+          echo ""
+          echo "Archive contents:"
+          tar tzf "${ARCHIVE_PATH}"
+
+          echo "archive_name=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
+          echo "archive_path=${ARCHIVE_PATH}" >> $GITHUB_OUTPUT
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release_package
+          path: ${{ steps.archive.outputs.archive_path }}
+          retention-days: 90
+          if-no-files-found: error
+
+  Release:
+    name: Create GitHub Release
+    needs: Package
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release_package
+          path: release_assets/
+
+      - name: Verify artifact
+        run: |
+          echo "=== Release assets ==="
+          ls -la release_assets/
+
+          ARCHIVE=$(ls release_assets/*.tar.gz 2>/dev/null | head -1)
+          if [ -z "${ARCHIVE}" ] || [ ! -f "${ARCHIVE}" ]; then
+            echo "::error::No release archive found!"
+            exit 1
+          fi
+
+          echo "Archive: ${ARCHIVE}"
+          echo "Size: $(du -h "${ARCHIVE}" | cut -f1)"
+          echo ""
+          echo "Archive contents:"
+          tar tzf "${ARCHIVE}"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release_assets/*.tar.gz
+          generate_release_notes: true
+          draft: false
+          prerelease: false

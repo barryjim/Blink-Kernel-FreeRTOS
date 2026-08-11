@@ -57,7 +57,7 @@ pushd "$PWD" > /dev/null 2>&1
         ./third_party/cpplint/cpplint.py "${SINGLE_FILE}"
     else
         patterns=('*.c' '*.h')
-        excludes=('./sdk/*' './third_party/*' './cmake_gcc/*' './scripts/*' './autogen/*' './.git/*' './.github/*')
+        excludes=('./sdk/*' './third_party/*' './cmake_gcc/*' './scripts/*' './autogen/*' './cmake_gcc/*')
 
         if [ "${INCLUDE_SDK}" == 0 ]; then
             excludes+=('./sdk/*')
@@ -74,9 +74,9 @@ pushd "$PWD" > /dev/null 2>&1
         done
 
         if [ "${PACKAGING_REPORT}" == 0 ]; then
-            find . "${exclude_args[@]}" '(' "${pattern_args[@]:1}" ')' -type f -print0 | xargs -0 -r ./third_party/cpplint/cpplint.py
+            find . "${exclude_args[@]}" '(' "${pattern_args[@]:1}" ')' -type f -exec ./third_party/cpplint/cpplint.py {} +
         else
-            find . "${exclude_args[@]}" '(' "${pattern_args[@]:1}" ')' -type f -print0 | xargs -0 -r ./third_party/cpplint/cpplint.py --output-format=junit-xml > ${CPPLINT_REPORT_PATH}/cpplint_report.xml
+            find . "${exclude_args[@]}" '(' "${pattern_args[@]:1}" ')' -type f -exec ./third_party/cpplint/cpplint.py --output-format=junit-xml {} + > ${CPPLINT_REPORT_PATH}/cpplint_report.xml
             echo "Cpplint report saved to ${CPPLINT_REPORT_PATH}/cpplint_report.xml"
         fi
     fi

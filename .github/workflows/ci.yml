@@ -1,29 +1,108 @@
-name: CI & Release
+name: CI
 
 on:
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: '代码分支或标签引用'
-        required: false
-        type: string
   push:
     branches: [ main, master ]
-    tags:
-      - 'v*'
-      - 'blink_kernel_freertos_s3-v*'
   pull_request:
     branches: [ main, master ]
-
-permissions:
-  contents: write
+  workflow_dispatch:
 
 jobs:
-  Release:
-    uses: ./.github/workflows/release_template.yaml
-    with:
-      ref: ${{ inputs.ref || github.ref }}
-      enable_code_analysis: true
-      enable_unit_test: true
-      enable_build: true
-      enable_release: true
+  CodeQuality:
+    name: Code Quality Checks
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Maximize runner disk
+        uses: ./.github/actions/maximize-runner-disk
+
+      - name: Make scripts executable
+        run: |
+          chmod +x scripts/*/*.sh scripts/**/*.sh 2>/dev/null || true
+
+      - name: Setup tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git python3-pip
+
+      - name: Setup cpplint
+        run: |
+          if [ ! -d "third_party" ]; then
+            mkdir -p third_party
+          fi
+          if [ ! -d "third_party/cpplint" ]; then
+            git clone --depth 1 https://github.com/cpplint/cpplint.git third_party/cpplint
+          fi
+
+      - name: Setup cppcheck
+        run: |
+          if [ ! -d "third_party/cppcheck" ]; then
+            bash ./scripts/cppcheck/setup.sh
+          fi
+
+      - name: Run cpplint
+        run: |
+          bash ./scripts/linter/linter.sh -p
+
+      - name: Run cppcheck
+        run: |
+          bash ./scripts/cppcheck/runner.sh
+
+      - name: Upload code quality report
+        uses: actions/upload-artifact@v4
+        if: ${{ success() }}
+        with:
+          name: code_quality_report
+          path: code_quality_report/
+          retention-days: 30
+
+  FormatCheck:
+    name: Code Format Check
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Maximize runner disk
+        uses: ./.github/actions/maximize-runner-disk
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-format
+
+      - name: Check formatting
+        run: |
+          bash ./scripts/format/format.sh -d
+
+  ArtifactCheck:
+    name: Verify Prebuilt Artifacts
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check firmware files
+        run: |
+          echo "=== Checking prebuilt firmware artifacts ==="
+          PROJECT_NAME="blink_kernel_freertos_s3"
+          FOUND=0
+          for ext in bin hex s37 map out; do
+            f="prebuilt/${PROJECT_NAME}.${ext}"
+            if [ -f "$f" ]; then
+              echo "  [OK] $f ($(stat --format=%s "$f") bytes)"
+              FOUND=1
+            fi
+          done
+          if [ $FOUND -eq 0 ]; then
+            echo "::warning::No prebuilt firmware found in prebuilt/"
+            echo "  To build firmware locally:"
+            echo "    1. Open project in Simplicity Studio"
+            echo "    2. Build the target"
+            echo "    3. Copy output files to prebuilt/"
+            echo "    4. Commit and push"
+          else
+            echo "  Prebuilt artifacts ready for Release."
+          fi
