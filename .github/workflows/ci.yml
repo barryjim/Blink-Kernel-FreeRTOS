@@ -1,0 +1,26 @@
+name: CI & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '代码分支或标签引用'
+        required: false
+        type: string
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+      - 'blink_kernel_freertos_s3-v*'
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  Release:
+    uses: ./.github/workflows/release_template.yaml
+    with:
+      ref: ${{ inputs.ref || github.ref }}
+      enable_code_analysis: true
+      enable_unit_test: true
+      enable_build: true
+      enable_release: true
