@@ -17,10 +17,6 @@ bool sl_simple_led_get_state(sl_led_t *led) {
     return false;
 }
 
-void sl_simple_led_toggle(sl_led_t *led) {
-    (void)led;
-}
-
 static sl_simple_led_context_t test_led_context = {
     .port = 0,
     .pin = 0,

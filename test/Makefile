@@ -32,7 +32,7 @@ $(TARGET_DYNAMIC): test_runner.c test_blink.c ../blink.c $(MOCK_SRCS) $(SUPPORT_
 test: $(TARGET)
 	@echo ""
 	@echo "============================================"
-	@echo "  Running Unit Tests (static allocation)"
+	@echo "  Running CMock Unit Tests (static)"
 	@echo "============================================"
 	@echo ""
 	@./$(TARGET)
@@ -40,7 +40,7 @@ test: $(TARGET)
 test_dynamic: $(TARGET_DYNAMIC)
 	@echo ""
 	@echo "============================================"
-	@echo "  Running Unit Tests (dynamic allocation)"
+	@echo "  Running CMock Unit Tests (dynamic)"
 	@echo "============================================"
 	@echo ""
 	@./$(TARGET_DYNAMIC)

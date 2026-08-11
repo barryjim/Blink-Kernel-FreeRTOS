@@ -9,6 +9,7 @@
 extern "C" {
 #endif
 
+/* ======== xTaskCreateStatic Mock ======== */
 typedef TaskHandle_t (*xTaskCreateStatic_callback_t)(
     TaskFunction_t pvTaskCode,
     const char *pcName,
@@ -35,6 +36,7 @@ void xTaskCreateStatic_ExpectAndReturn(
 int xTaskCreateStatic_call_count(void);
 void xTaskCreateStatic_Verify(void);
 
+/* ======== xTaskCreate Mock ======== */
 typedef BaseType_t (*xTaskCreate_callback_t)(
     TaskFunction_t pvTaskCode,
     const char *pcName,
@@ -50,6 +52,7 @@ void xTaskCreate_Return(BaseType_t retval);
 int xTaskCreate_call_count(void);
 void xTaskCreate_Verify(void);
 
+/* ======== vTaskDelay Mock ======== */
 typedef void (*vTaskDelay_callback_t)(TickType_t xTicksToDelay);
 
 void vTaskDelay_Stub(vTaskDelay_callback_t callback);
@@ -57,6 +60,7 @@ void vTaskDelay_ExpectAnyArgs(void);
 int vTaskDelay_call_count(void);
 void vTaskDelay_Verify(void);
 
+/* ======== Init / Cleanup ======== */
 void Mocktask_Init(void);
 void Mocktask_Cleanup(void);
 void Mocktask_Verify(void);

@@ -18,6 +18,22 @@
 #ifndef BLINK_H
 #define BLINK_H
 
+#ifndef TOOGLE_DELAY_MS
+#define TOOGLE_DELAY_MS            200
+#endif
+
+#ifndef BLINK_TASK_STACK_SIZE
+#define BLINK_TASK_STACK_SIZE      configMINIMAL_STACK_SIZE
+#endif
+
+#ifndef BLINK_TASK_PRIO
+#define BLINK_TASK_PRIO            20
+#endif
+
+#ifndef EXAMPLE_USE_STATIC_ALLOCATION
+#define EXAMPLE_USE_STATIC_ALLOCATION      1
+#endif
+
 /***************************************************************************//**
  * Initialize blink example
  ******************************************************************************/

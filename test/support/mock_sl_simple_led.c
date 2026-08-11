@@ -44,11 +44,21 @@ void sl_led_init_Stub(sl_led_init_callback_t callback) {
     sl_led_init_cb = callback;
 }
 
+void sl_led_init_ExpectAnyArgs(void) {
+    sl_led_init_ctrl.expect_any_args_called = 1;
+}
+
+int sl_led_init_call_count(void) {
+    return sl_led_init_ctrl.call_count;
+}
+
 /* ======================== sl_led_turn_on ======================== */
 
+static mock_ctrl_t sl_led_turn_on_ctrl;
 static sl_led_turn_on_callback_t sl_led_turn_on_cb = NULL;
 
 void sl_led_turn_on(sl_led_t *led) {
+    sl_led_turn_on_ctrl.call_count++;
     if (sl_led_turn_on_cb) {
         sl_led_turn_on_cb(led);
     }
@@ -58,11 +68,21 @@ void sl_led_turn_on_Stub(sl_led_turn_on_callback_t callback) {
     sl_led_turn_on_cb = callback;
 }
 
+void sl_led_turn_on_ExpectAnyArgs(void) {
+    sl_led_turn_on_ctrl.expect_any_args_called = 1;
+}
+
+int sl_led_turn_on_call_count(void) {
+    return sl_led_turn_on_ctrl.call_count;
+}
+
 /* ======================== sl_led_turn_off ======================== */
 
+static mock_ctrl_t sl_led_turn_off_ctrl;
 static sl_led_turn_off_callback_t sl_led_turn_off_cb = NULL;
 
 void sl_led_turn_off(sl_led_t *led) {
+    sl_led_turn_off_ctrl.call_count++;
     if (sl_led_turn_off_cb) {
         sl_led_turn_off_cb(led);
     }
@@ -70,6 +90,14 @@ void sl_led_turn_off(sl_led_t *led) {
 
 void sl_led_turn_off_Stub(sl_led_turn_off_callback_t callback) {
     sl_led_turn_off_cb = callback;
+}
+
+void sl_led_turn_off_ExpectAnyArgs(void) {
+    sl_led_turn_off_ctrl.expect_any_args_called = 1;
+}
+
+int sl_led_turn_off_call_count(void) {
+    return sl_led_turn_off_ctrl.call_count;
 }
 
 /* ======================== sl_led_get_state ======================== */
@@ -92,32 +120,68 @@ void sl_led_get_state_Return(bool state) {
     sl_led_get_state_default_retval = state;
 }
 
+/* ======================== sl_simple_led_toggle (底层实现) ======================== */
+
+static mock_ctrl_t sl_simple_led_toggle_ctrl;
+static sl_simple_led_toggle_callback_t sl_simple_led_toggle_cb = NULL;
+
+void sl_simple_led_toggle(sl_led_t *led) {
+    sl_simple_led_toggle_ctrl.call_count++;
+    if (sl_simple_led_toggle_cb) {
+        sl_simple_led_toggle_cb(led);
+    }
+}
+
+void sl_simple_led_toggle_Stub(sl_simple_led_toggle_callback_t callback) {
+    sl_simple_led_toggle_cb = callback;
+}
+
+void sl_simple_led_toggle_ExpectAnyArgs(void) {
+    sl_simple_led_toggle_ctrl.expect_any_args_called = 1;
+}
+
+int sl_simple_led_toggle_call_count(void) {
+    return sl_simple_led_toggle_ctrl.call_count;
+}
+
 /* ======================== Init / Cleanup ======================== */
 
 void Mocksl_simple_led_Init(void) {
     mock_ctrl_init(&sl_led_toggle_ctrl);
     mock_ctrl_init(&sl_led_init_ctrl);
+    mock_ctrl_init(&sl_led_turn_on_ctrl);
+    mock_ctrl_init(&sl_led_turn_off_ctrl);
+    mock_ctrl_init(&sl_simple_led_toggle_ctrl);
 
     sl_led_toggle_cb = NULL;
     sl_led_init_cb = NULL;
     sl_led_turn_on_cb = NULL;
     sl_led_turn_off_cb = NULL;
     sl_led_get_state_cb = NULL;
+    sl_simple_led_toggle_cb = NULL;
+
     sl_led_get_state_default_retval = false;
 }
 
 void Mocksl_simple_led_Cleanup(void) {
     mock_ctrl_reset(&sl_led_toggle_ctrl);
     mock_ctrl_reset(&sl_led_init_ctrl);
+    mock_ctrl_reset(&sl_led_turn_on_ctrl);
+    mock_ctrl_reset(&sl_led_turn_off_ctrl);
+    mock_ctrl_reset(&sl_simple_led_toggle_ctrl);
 
     sl_led_toggle_cb = NULL;
     sl_led_init_cb = NULL;
     sl_led_turn_on_cb = NULL;
     sl_led_turn_off_cb = NULL;
     sl_led_get_state_cb = NULL;
+    sl_simple_led_toggle_cb = NULL;
 }
 
 void Mocksl_simple_led_Verify(void) {
     mock_ctrl_check_calls(&sl_led_toggle_ctrl, "sl_led_toggle");
     mock_ctrl_check_calls(&sl_led_init_ctrl, "sl_led_init");
+    mock_ctrl_check_calls(&sl_led_turn_on_ctrl, "sl_led_turn_on");
+    mock_ctrl_check_calls(&sl_led_turn_off_ctrl, "sl_led_turn_off");
+    mock_ctrl_check_calls(&sl_simple_led_toggle_ctrl, "sl_simple_led_toggle");
 }

@@ -1,6 +1,19 @@
 #include "unity_stub.h"
+#include <stdarg.h>
 
 UnityStruct Unity;
+
+static char formatted_msg[256];
+
+int Unity_GetSelf(void) { return 0; }
+
+const char *UnityMakeFormattedMessage(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(formatted_msg, sizeof(formatted_msg), fmt, args);
+    va_end(args);
+    return formatted_msg;
+}
 
 void UnityAssertEqualNumber(unsigned int expected, unsigned int actual,
                             const char *msg, unsigned int line, int size) {

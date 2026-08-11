@@ -5,6 +5,7 @@
 static mock_ctrl_t xTaskCreateStatic_ctrl;
 static xTaskCreateStatic_callback_t xTaskCreateStatic_cb = NULL;
 static TaskHandle_t xTaskCreateStatic_default_retval = NULL;
+static int xTaskCreateStatic_expect_any_args = 0;
 
 TaskHandle_t xTaskCreateStatic(
     TaskFunction_t pvTaskCode,
@@ -29,6 +30,7 @@ void xTaskCreateStatic_Stub(xTaskCreateStatic_callback_t callback) {
 }
 
 void xTaskCreateStatic_ExpectAnyArgs(void) {
+    xTaskCreateStatic_expect_any_args = 1;
     xTaskCreateStatic_ctrl.expect_any_args_called = 1;
 }
 
@@ -148,6 +150,7 @@ void Mocktask_Init(void) {
 
     xTaskCreateStatic_default_retval = NULL;
     xTaskCreate_default_retval = pdPASS;
+    xTaskCreateStatic_expect_any_args = 0;
 }
 
 void Mocktask_Cleanup(void) {

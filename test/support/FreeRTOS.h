@@ -19,11 +19,15 @@ typedef uint32_t configSTACK_DEPTH_TYPE;
 #define pdFALSE         ((BaseType_t) 0)
 #define pdPASS          (pdTRUE)
 #define pdFAIL          (pdFALSE)
+#define pdWAIT          ((BaseType_t) 2)
 
 #define tskIDLE_PRIORITY ((UBaseType_t) 0)
 
 #define configTICK_RATE_HZ    ((TickType_t) 1000)
 #define configMINIMAL_STACK_SIZE ((uint16_t) 160)
+
+#define portMAX_DELAY        ((TickType_t) 0xFFFFFFFF)
+#define portTICK_PERIOD_MS   ((TickType_t) (1000 / configTICK_RATE_HZ))
 
 #define configMAX_TASK_NAME_LEN 16
 
@@ -46,6 +50,10 @@ typedef struct tskTaskControlBlock {
 typedef tskTCB StaticTask_t;
 
 #define EFM_ASSERT(x) ((void)0)
+
+#ifndef INCLUDE_vTaskDelay
+#define INCLUDE_vTaskDelay 1
+#endif
 
 #ifdef __cplusplus
 }

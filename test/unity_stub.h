@@ -43,6 +43,10 @@ void UnityAssertTrue(int condition, unsigned int line);
 void UnityAssertFalse(int condition, unsigned int line);
 void UnityTestRunnerStart(void);
 void UnityTestRunnerEnd(void);
+void UnityAddTest(const char *name, void (*func)(void));
+
+int Unity_GetSelf(void);
+const char *UnityMakeFormattedMessage(const char *fmt, ...);
 
 void setUp(void);
 void tearDown(void);
@@ -93,6 +97,14 @@ void tearDown(void);
 
 #define TEST_ASSERT_FALSE(condition) \
     UnityAssertFalse((int)(condition), __LINE__)
+
+#define TEST_ASSERT_EQUAL_FLOAT(expected, actual) \
+    UnityAssertEqualNumber((unsigned int)(expected), (unsigned int)(actual), NULL, __LINE__, 4)
+
+#define UNITY_TEST_FAIL(line, msg) \
+    do { Unity.CurrentTestFailed = 1; \
+         printf("    FAIL at line %u: %s\n", line, msg); \
+         return; } while(0)
 
 #ifdef __cplusplus
 }
