@@ -1,0 +1,244 @@
+# =============================================================================
+# 可复用 CI/CD 工作流模板
+# =============================================================================
+# 本工作流使用 workflow_call 触发，支持被 ci.yml 和 release.yml 调用。
+# 设计为通用嵌入式项目（blink_kernel_freertos_s3），通过输入参数控制各阶段。
+#
+# 完整执行流程：CodeAnalysis → UnitTest → Build(Package) → Release
+#
+# 作者：CI/CD Team
+# =============================================================================
+
+# ---------- 工作流触发与输入参数 ----------
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "代码分支或标签引用（如 refs/heads/main 或 v1.0.0）"
+        required: true
+        type: string
+      enable_code_analysis:
+        description: "是否启用代码分析（cpplint + cppcheck）"
+        type: boolean
+        default: true
+      enable_unit_test:
+        description: "是否启用单元测试（cmocka + 覆盖率）"
+        type: boolean
+        default: true
+      enable_build:
+        description: "是否构建/打包固件产物"
+        type: boolean
+        default: false
+      enable_release:
+        description: "是否创建 GitHub Release"
+        type: boolean
+        default: false
+
+# ---------- Job 1: 代码分析 ----------
+# 功能：对源代码进行静态分析和风格检查，生成代码质量报告
+# 执行：cpplint（代码风格）+ cppcheck（潜在缺陷）
+# 产物：code_quality_report.tar.gz
+jobs:
+  CodeAnalysis:
+    if: ${{ inputs.enable_code_analysis }}
+    runs-on: ubuntu-22.04
+    steps:
+      # Step 1: 拉取指定分支/标签的代码
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      # Step 2: 确保脚本可执行
+      - name: Make scripts executable
+        run: |
+          chmod +x scripts/*/*.sh scripts/**/*.sh 2>/dev/null || true
+
+      # Step 3: 安装基础工具
+      - name: Setup tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git python3-pip
+
+      # Step 4: 缓存 cppcheck 编译产物，key 随 setup.sh 哈希变化自动失效
+      - name: Cache cppcheck
+        uses: actions/cache@v4
+        with:
+          path: ./third_party/cppcheck
+          key: ${{ runner.os }}-cppcheck-${{ hashFiles('scripts/cppcheck/setup.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-cppcheck-
+
+      # Step 5: 依次执行代码风格检查和静态分析
+      # 5a. cpplint 代码风格检查（排除 SDK/第三方/脚本等目录）
+      # 5b. cppcheck 静态分析（检查 warning/style/performance/portability 问题）
+      # 5c. 将生成的报告目录打包为压缩包
+      - name: Run Code Analysis
+        run: |
+          if [ -f "./scripts/linter/setup.sh" ]; then
+            source ./scripts/linter/setup.sh
+          fi
+          if [ -f "./scripts/linter/linter.sh" ]; then
+            source ./scripts/linter/linter.sh -p
+          fi
+          if [ -f "./scripts/cppcheck/setup.sh" ]; then
+            source ./scripts/cppcheck/setup.sh
+          fi
+          if [ -f "./scripts/cppcheck/runner.sh" ]; then
+            source ./scripts/cppcheck/runner.sh
+          fi
+          if [ -d "./code_quality_report" ]; then
+            tar -zcvf code_quality_report.tar.gz code_quality_report
+          else
+            echo "::warning::No code quality report directory found"
+            tar -zcvf code_quality_report.tar.gz --files-from /dev/null
+          fi
+        shell: bash
+
+      # Step 6: 上传代码质量报告为 CI 产物
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: ${{ success() }}
+        with:
+          name: code_quality_report
+          path: ./code_quality_report.tar.gz
+          if-no-files-found: ignore
+
+# ---------- Job 2: 单元测试 ----------
+# 功能：使用 cmocka 框架运行组件级单元测试，生成覆盖率报告
+# 依赖：CodeAnalysis 成功（或被跳过）
+# 产物：unit_test_report.tar.gz
+  UnitTest:
+    if: ${{ !cancelled() && inputs.enable_unit_test && (needs.CodeAnalysis.result == 'success' || needs.CodeAnalysis.result == 'skipped') }}
+    needs: CodeAnalysis
+    runs-on: ubuntu-22.04
+    steps:
+      # Step 1: 拉取代码（每个 Job 独立拉取，确保环境隔离）
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      # Step 2: 运行单元测试
+      # 2a. setup.sh：安装 cmocka 测试框架 + gcovr 覆盖率工具
+      # 2b. runner.sh：cmake 配置 + make 编译 + ctest 执行所有测试
+      # 2c. codecoverage.sh -w：生成 HTML 格式代码覆盖率报告
+      # 2d. 将所有报告打包压缩
+      - name: Run Unit Tests
+        run: |
+          if [ -f "./scripts/unittest/setup.sh" ]; then
+            source ./scripts/unittest/setup.sh
+            mkdir -p ./unit_test_report
+            source ./scripts/unittest/runner.sh > ./unit_test_report/unit_test_report.txt
+            [ -f "./scripts/unittest/codecoverage.sh" ] && \
+              source ./scripts/unittest/codecoverage.sh -w > ./unit_test_report/code_coverage.txt
+            if [ -d "./scripts/unittest/code_coverage" ]; then
+              cp -r ./scripts/unittest/code_coverage ./unit_test_report/code_coverage
+            fi
+          fi
+          if [ -d "./unit_test_report" ]; then
+            tar -zcvf unit_test_report.tar.gz unit_test_report
+          else
+            echo "::warning::No unit test report directory found"
+            tar -zcvf unit_test_report.tar.gz --files-from /dev/null
+          fi
+        shell: bash
+
+      # Step 3: 上传测试报告为 CI 产物
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: ${{ success() }}
+        with:
+          name: unit_test_report
+          path: ./unit_test_report.tar.gz
+          if-no-files-found: ignore
+
+# ---------- Job 3: 固件打包 ----------
+# 功能：从 prebuilt/ 目录收集预编译固件产物，打包为 artifacts.tar.gz
+# 依赖：CodeAnalysis + UnitTest 均成功（或跳过）
+# 产物：artifacts.tar.gz（包含 .bin/.hex/.s37/.map/.out 等固件文件）
+  Build:
+    if: ${{ !cancelled() && inputs.enable_build && (needs.CodeAnalysis.result == 'success' || needs.CodeAnalysis.result == 'skipped') && (needs.UnitTest.result == 'success' || needs.UnitTest.result == 'skipped') }}
+    needs: [CodeAnalysis, UnitTest]
+    runs-on: ubuntu-22.04
+    steps:
+      # Step 1: 拉取代码
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      # Step 2: 释放 GitHub Runner 磁盘空间
+      - name: Maximize runner disk
+        uses: ./.github/actions/maximize-runner-disk
+
+      # Step 3: 打包预编译固件产物
+      # 使用 artifacts.sh 从 prebuilt/ 收集 .bin/.hex/.s37/.map/.out 文件
+      - name: Package firmware artifacts
+        run: |
+          source ./scripts/fw_packaging/artifacts.sh
+        shell: bash
+
+      # Step 4: 上传固件产物为 CI 产物
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts
+          path: ./artifacts/
+
+# ---------- Job 4: 创建 GitHub Release ----------
+# 功能：下载所有产物，创建正式的 GitHub Release
+# 仅在 enable_release=true 且 Build 成功时执行
+# 权限：需要 contents: write（创建 Release 和上传附件）
+  Release:
+    if: ${{ !cancelled() && inputs.enable_release && needs.Build.result == 'success' }}
+    needs: Build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      # Step 1: 下载所有前置 Job 上传的产物
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: .
+
+      # Step 2: 验证下载的产物
+      - name: Verify artifact
+        run: |
+          echo "=== Release assets ==="
+          ls -la artifacts/
+          ARCHIVE=$(ls artifacts/*.tar.gz 2>/dev/null | head -1)
+          if [ -z "${ARCHIVE}" ] || [ ! -f "${ARCHIVE}" ]; then
+            echo "::error::No release archive found!"
+            exit 1
+          fi
+          echo "Archive: ${ARCHIVE}"
+          echo "Size: $(du -h "${ARCHIVE}" | cut -f1)"
+          echo ""
+          echo "Archive contents:"
+          tar tzf "${ARCHIVE}"
+
+      # Step 3: 收集要附加到 Release 的文件
+      - name: Collect release files
+        id: release_files
+        run: |
+          {
+            echo "files<<EOF"
+            [ -f "artifacts/artifacts.tar.gz" ] && echo "artifacts/artifacts.tar.gz"
+            [ "${{ inputs.enable_code_analysis }}" = "true" ] && [ -f "code_quality_report/code_quality_report.tar.gz" ] && echo "code_quality_report/code_quality_report.tar.gz"
+            [ "${{ inputs.enable_unit_test }}" = "true" ] && [ -f "unit_test_report/unit_test_report.tar.gz" ] && echo "unit_test_report/unit_test_report.tar.gz"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      # Step 4: 创建 GitHub Release
+      # - 附加产物：固件产物（必选）、代码质量报告（可选）、单元测试报告（可选）
+      # - fail_on_unmatched_files: true 确保文件路径错误时 Job 失败
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.release_files.outputs.files }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true

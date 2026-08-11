@@ -1,10 +1,10 @@
 # =============================================================================
-# 可复用 CI/CD 工作流模板
+# 可复用发布工作流模板
 # =============================================================================
-# 本工作流使用 workflow_call 触发，支持被 ci.yml 和 release.yml 调用。
-# 设计为通用嵌入式项目（blink_kernel_freertos_s3），通过输入参数控制各阶段。
+# 本工作流使用 workflow_call 触发，支持被任意平台的入口工作流调用。
+# 设计为多平台通用（silabs_mg301 / qorvo_qpg62 等），通过 platform 参数区分。
 #
-# 完整执行流程：CodeAnalysis → UnitTest → Build(Package) → Release
+# 完整执行流程：CodeAnalysis → UnitTest → Build → Release
 #
 # 作者：CI/CD Team
 # =============================================================================
@@ -14,7 +14,11 @@ on:
   workflow_call:
     inputs:
       ref:
-        description: "代码分支或标签引用（如 refs/heads/main 或 v1.0.0）"
+        description: "代码分支或标签引用（如 silabs_mg301_langdmatt）"
+        required: true
+        type: string
+      platform:
+        description: "平台标识（如 silabs_mg301 / qorvo_qpg62）"
         required: true
         type: string
       enable_code_analysis:
@@ -25,14 +29,18 @@ on:
         description: "是否启用单元测试（cmocka + 覆盖率）"
         type: boolean
         default: true
-      enable_build:
-        description: "是否构建/打包固件产物"
+      build_all_types:
+        description: "构建类型（debug / dev / release），默认 dev"
+        type: string
+        default: dev
+      build_test_upgrade:
+        description: "是否构建 OTA 升级测试固件（版本号自动+1）"
         type: boolean
-        default: false
-      enable_release:
-        description: "是否创建 GitHub Release"
-        type: boolean
-        default: false
+        default: true
+    secrets:
+      platform_sdk_token:
+        description: "SDK 访问令牌（用于私有仓库认证），可选"
+        required: false
 
 # ---------- Job 1: 代码分析 ----------
 # 功能：对源代码进行静态分析和风格检查，生成代码质量报告
@@ -40,6 +48,7 @@ on:
 # 产物：code_quality_report.tar.gz
 jobs:
   CodeAnalysis:
+    # 根据输入参数决定是否执行此 Job
     if: ${{ inputs.enable_code_analysis }}
     runs-on: ubuntu-22.04
     steps:
@@ -49,25 +58,26 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
-      # Step 2: 确保脚本可执行
-      - name: Make scripts executable
-        run: |
-          chmod +x scripts/*/*.sh scripts/**/*.sh 2>/dev/null || true
+      # Step 2: 为 MG301 平台额外拉取匹配命名格式的 Tags
+      # 原因：silabs_mg301-* 格式的 tag 在其他分支上，需要单独 fetch 才能 checkout
+      - name: Fetch siliconlabs mg301 refs (Only Silabs MG301 requires)
+        if: inputs.platform == 'silabs_mg301'
+        run: git fetch origin '+refs/tags/silabs_mg301-*:refs/tags/silabs_mg301-*'
 
-      # Step 3: 安装基础工具
-      - name: Setup tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq git python3-pip
+      # Step 3: 如果当前触发是 Tag 推送，则切换到该 Tag 对应代码
+      - name: Checkout Tag
+        if: startsWith(github.event.ref, 'refs/tags/')
+        run: git checkout ${{ github.ref_name }}
 
       # Step 4: 缓存 cppcheck 编译产物，key 随 setup.sh 哈希变化自动失效
+      # 作用：避免每次重新编译 cppcheck，节省 CI 时间
       - name: Cache cppcheck
         uses: actions/cache@v4
         with:
-          path: ./third_party/cppcheck
-          key: ${{ runner.os }}-cppcheck-${{ hashFiles('scripts/cppcheck/setup.sh') }}
+          path: ./${{ inputs.platform }}/third_party/cppcheck
+          key: ${{ runner.os }}-${{ inputs.platform }}-cppcheck-modules-${{ hashFiles('${{ inputs.platform }}/scripts/cppcheck/setup.sh') }}
           restore-keys: |
-            ${{ runner.os }}-cppcheck-
+            ${{ runner.os }}-${{ inputs.platform }}-cache-cppcheck-modules-
 
       # Step 5: 依次执行代码风格检查和静态分析
       # 5a. cpplint 代码风格检查（排除 SDK/第三方/脚本等目录）
@@ -75,40 +85,33 @@ jobs:
       # 5c. 将生成的报告目录打包为压缩包
       - name: Run Code Analysis
         run: |
-          if [ -f "./scripts/linter/setup.sh" ]; then
-            source ./scripts/linter/setup.sh
+          if [ -f "./${{ inputs.platform }}/scripts/linter/setup.sh" ]; then
+            source ./${{ inputs.platform }}/scripts/linter/setup.sh       # 安装 cpplint
+            source ./${{ inputs.platform }}/scripts/linter/linter.sh -p   # 运行 cpplint 并生成 XML 报告
           fi
-          if [ -f "./scripts/linter/linter.sh" ]; then
-            source ./scripts/linter/linter.sh -p
+          if [ -f "./${{ inputs.platform }}/scripts/cppcheck/setup.sh" ]; then
+            source ./${{ inputs.platform }}/scripts/cppcheck/setup.sh     # 安装 cppcheck
+            source ./${{ inputs.platform }}/scripts/cppcheck/runner.sh    # 运行 cppcheck 并生成 XML+HTML 报告
           fi
-          if [ -f "./scripts/cppcheck/setup.sh" ]; then
-            source ./scripts/cppcheck/setup.sh
-          fi
-          if [ -f "./scripts/cppcheck/runner.sh" ]; then
-            source ./scripts/cppcheck/runner.sh
-          fi
-          if [ -d "./code_quality_report" ]; then
-            tar -zcvf code_quality_report.tar.gz code_quality_report
-          else
-            echo "::warning::No code quality report directory found"
-            tar -zcvf code_quality_report.tar.gz --files-from /dev/null
-          fi
+          # 将报告目录压缩打包
+          [ -d "./${{ inputs.platform }}/code_quality_report" ] && \
+            tar -zcvf code_quality_report.tar.gz -C${{ inputs.platform }} code_quality_report
         shell: bash
 
-      # Step 6: 上传代码质量报告为 CI 产物
+      # Step 6: 上传代码质量报告为 CI 产物，供后续 Job 和 Release 使用
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         if: ${{ success() }}
         with:
           name: code_quality_report
           path: ./code_quality_report.tar.gz
-          if-no-files-found: ignore
 
 # ---------- Job 2: 单元测试 ----------
 # 功能：使用 cmocka 框架运行组件级单元测试，生成覆盖率报告
 # 依赖：CodeAnalysis 成功（或被跳过）
 # 产物：unit_test_report.tar.gz
   UnitTest:
+    # 前置条件：未取消 + 启用单元测试 + CodeAnalysis 成功或跳过
     if: ${{ !cancelled() && inputs.enable_unit_test && (needs.CodeAnalysis.result == 'success' || needs.CodeAnalysis.result == 'skipped') }}
     needs: CodeAnalysis
     runs-on: ubuntu-22.04
@@ -119,46 +122,64 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
-      # Step 2: 运行单元测试
-      # 2a. setup.sh：安装 cmocka 测试框架 + gcovr 覆盖率工具
-      # 2b. runner.sh：cmake 配置 + make 编译 + ctest 执行所有测试
-      # 2c. codecoverage.sh -w：生成 HTML 格式代码覆盖率报告
-      # 2d. 将所有报告打包压缩
-      - name: Run Unit Tests
+      # Step 2: Tag 触发时切换到对应 Tag
+      - name: Checkout Tag
+        if: startsWith(github.event.ref, 'refs/tags/')
+        run: git checkout ${{ github.ref_name }}
+
+      # Step 3: 配置 Git 用户信息，并将 SDK Token 写入本地文件
+      # Token 用于 checkout.sh 中访问私有 SDK 仓库的认证
+      - name: Git config
         run: |
-          if [ -f "./scripts/unittest/setup.sh" ]; then
-            source ./scripts/unittest/setup.sh
-            mkdir -p ./unit_test_report
-            source ./scripts/unittest/runner.sh > ./unit_test_report/unit_test_report.txt
-            [ -f "./scripts/unittest/codecoverage.sh" ] && \
-              source ./scripts/unittest/codecoverage.sh -w > ./unit_test_report/code_coverage.txt
-            if [ -d "./scripts/unittest/code_coverage" ]; then
-              cp -r ./scripts/unittest/code_coverage ./unit_test_report/code_coverage
-            fi
-          fi
-          if [ -d "./unit_test_report" ]; then
-            tar -zcvf unit_test_report.tar.gz unit_test_report
-          else
-            echo "::warning::No unit test report directory found"
-            tar -zcvf unit_test_report.tar.gz --files-from /dev/null
+          git config --global user.email "action@github.com"
+          git config --global user.name "action"
+          if [ -n "${{ secrets.platform_sdk_token }}" ]; then
+            echo "Token is provided, writing to file..."
+            echo "${{ secrets.platform_sdk_token }}" > ./${{ inputs.platform }}/scripts/setup/token
           fi
         shell: bash
 
-      # Step 3: 上传测试报告为 CI 产物
+      # Step 4: 浅克隆 SDK（-s 参数：--depth 1 节省时间）
+      # 包含 Silabs Simplicity SDK 2024.12 + Matter Extension v2.5.0
+      # 克隆完成后自动应用 patches 和 sdk_commit_tmp 覆盖层
+      - name: Clone SDK 
+        run: source ./${{ inputs.platform }}/scripts/setup/checkout.sh -s
+        shell: bash
+
+      # Step 5: 运行单元测试
+      # 5a. setup.sh：安装 cmocka 测试框架 + gcovr 覆盖率工具
+      # 5b. runner.sh：cmake 配置 + make 编译 + ctest 执行所有测试
+      # 5c. codecoverage.sh -w：生成 HTML 格式代码覆盖率报告
+      # 5d. 将所有报告打包压缩
+      - name: Run Unit Tests
+        run: |
+          if [ -f "./${{ inputs.platform }}/scripts/unittest/setup.sh" ]; then
+            source ./${{ inputs.platform }}/scripts/unittest/setup.sh
+            mkdir -p ./${{ inputs.platform }}/unit_test_report
+            source ./${{ inputs.platform }}/scripts/unittest/runner.sh > ./${{ inputs.platform }}/unit_test_report/unit_test_report.txt
+            [ -f "./${{ inputs.platform }}/scripts/unittest/codecoverage.sh" ] && \
+              source ./${{ inputs.platform }}/scripts/unittest/codecoverage.sh -w
+          fi
+          [ -d "./${{ inputs.platform }}/unit_test_report" ] && \
+            tar -zcvf unit_test_report.tar.gz -C${{ inputs.platform }} unit_test_report
+        shell: bash
+
+      # Step 6: 上传测试报告为 CI 产物
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         if: ${{ success() }}
         with:
           name: unit_test_report
           path: ./unit_test_report.tar.gz
-          if-no-files-found: ignore
 
-# ---------- Job 3: 固件打包 ----------
-# 功能：从 prebuilt/ 目录收集预编译固件产物，打包为 artifacts.tar.gz
+# ---------- Job 3: 固件构建 ----------
+# 功能：克隆完整 SDK → 配置环境 → 编译所有活跃项目 → 打包固件产物
 # 依赖：CodeAnalysis + UnitTest 均成功（或跳过）
-# 产物：artifacts.tar.gz（包含 .bin/.hex/.s37/.map/.out 等固件文件）
+# 产物：artifacts.tar.gz（包含 .s37 固件、.ota 升级包等）
   Build:
-    if: ${{ !cancelled() && inputs.enable_build && (needs.CodeAnalysis.result == 'success' || needs.CodeAnalysis.result == 'skipped') && (needs.UnitTest.result == 'success' || needs.UnitTest.result == 'skipped') }}
+    # 前置条件：两个前置 Job 都成功或被跳过
+    if: ${{ !cancelled() && (needs.CodeAnalysis.result == 'success' || needs.CodeAnalysis.result == 'skipped') && 
+           (needs.UnitTest.result == 'success' || needs.UnitTest.result == 'skipped') }}
     needs: [CodeAnalysis, UnitTest]
     runs-on: ubuntu-22.04
     steps:
@@ -168,77 +189,124 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
-      # Step 2: 释放 GitHub Runner 磁盘空间
+      # Step 2: Qorvo 平台需要移除系统自带的 ninja（版本冲突）
+      - name: Remove Ninja (Only Qorvo requires)
+        if: inputs.platform == 'qorvo_qpg62'
+        run: |
+          which ninja && sudo rm $(which ninja) || true
+        shell: bash
+
+      # Step 3: 自定义 Action — 释放 GitHub Runner 磁盘空间
+      # 删除 /usr/share/dotnet (1.6GB) 和 /usr/local/lib/android/sdk (8.9GB)
+      # 为 SDK + Matter Extension + 编译产物腾出足够空间
       - name: Maximize runner disk
         uses: ./.github/actions/maximize-runner-disk
 
-      # Step 3: 打包预编译固件产物
-      # 使用 artifacts.sh 从 prebuilt/ 收集 .bin/.hex/.s37/.map/.out 文件
-      - name: Package firmware artifacts
+      # Step 4: MG301 平台额外 fetch 匹配的 tag
+      - name: Fetch siliconlabs mg301 refs (Only Silabs MG301 requires)
+        if: inputs.platform == 'silabs_mg301'
+        run: git fetch origin '+refs/tags/silabs_mg301-*:refs/tags/silabs_mg301-*'
+
+      # Step 5: Tag 触发时切换到对应 Tag
+      - name: Checkout Tag
+        if: startsWith(github.event.ref, 'refs/tags/')
+        run: git checkout ${{ github.ref_name }}
+
+      # Step 6: 配置 Git 和写入 SDK Token
+      - name: Git config
         run: |
-          source ./scripts/fw_packaging/artifacts.sh
+          git config --global user.email "action@github.com"
+          git config --global user.name "action"
+          if [ -n "${{ secrets.platform_sdk_token }}" ]; then
+            echo "Token is provided, writing to file..."
+            echo "${{ secrets.platform_sdk_token }}" > ./${{ inputs.platform }}/scripts/setup/token
+          fi
         shell: bash
 
-      # Step 4: 上传固件产物为 CI 产物
+      # Step 7: 克隆完整 SDK（MG301 使用浅克隆，Qorvo 跳过）
+      # 包含 Silabs Simplicity SDK 2024.12 + Matter Extension v2.5.0
+      # 克隆后自动应用 patches（matter_extension 适配 + sixx301 支持 + sdk_commit_tmp 覆盖）
+      - name: Clone SDK
+        if: inputs.platform != 'qorvo_qpg62'
+        run: source ./${{ inputs.platform }}/scripts/setup/checkout.sh -s
+        shell: bash
+
+      # Step 8: 激活构建环境
+      # 安装 Python 依赖（dload、dotenv），读取 active_projects 获取目标项目，执行 generate.sh
+      - name: Setup environment
+        if: inputs.platform != 'qorvo_qpg62'
+        run: source ./${{ inputs.platform }}/scripts/setup/activate.sh
+        shell: bash
+
+      # Step 9a: 开发构建（非 Tag 触发）
+      # 遍历 active_projects 中列出的所有项目，按指定构建类型（dev/debug/release）编译
+      # 可选：-u 参数启用 OTA 升级测试构建（版本号自动+1后编译再恢复）
+      - name: Build all projects
+        if: false == startsWith(github.event.ref, 'refs/tags/')
+        run: |
+          ARGS=()
+          [ -n "${{ inputs.build_all_types }}" ] && ARGS+=("-t" "${{ inputs.build_all_types }}")
+          [ "${{ inputs.build_test_upgrade }}" = "true" ] && ARGS+=("-u")
+          echo "Args: ${ARGS[*]}"
+          source ./${{ inputs.platform }}/scripts/fw_packaging/artifacts.sh "${ARGS[@]}"
+        shell: bash
+
+      # Step 9b: 发布构建（Tag 触发）
+      # 从 Tag 名解析项目名：silabs_mg301-{project}-{version}
+      # 例如 tag "silabs_mg301-ws_pendant_concurrent-1.0.0" → 项目 "ws_pendant_concurrent"
+      # 只构建该项目，使用 -p 参数指定
+      - name: Build release project
+        if: startsWith(github.event.ref, 'refs/tags/')
+        run: |
+          RELEASE_PROJECT=$(echo "${{ github.ref_name }}" | awk -F '-' '{print $2}')
+          if [ -z "$RELEASE_PROJECT" ]; then
+            echo "::error::Invalid tag format: ${{ github.ref_name }}. Expected format: 'prefix-projectName-version'"
+            exit 1
+          fi
+          echo "Release project: $RELEASE_PROJECT"
+          ARGS=("-p" "$RELEASE_PROJECT")
+          [ "${{ inputs.build_test_upgrade }}" = "true" ] && ARGS+=("-u")
+          echo "Args: ${ARGS[*]}"
+          source ./${{ inputs.platform }}/scripts/fw_packaging/artifacts.sh "${ARGS[@]}"
+        shell: bash
+
+      # Step 10: 上传固件产物为 CI 产物
+      # 包含：.s37 固件文件、.ota 升级包、bootloader、factory_test 等
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: artifacts
-          path: ./artifacts/
+          path: ./${{ inputs.platform }}/artifacts/artifacts.tar.gz
 
 # ---------- Job 4: 创建 GitHub Release ----------
 # 功能：下载所有产物，创建正式的 GitHub Release
-# 仅在 enable_release=true 且 Build 成功时执行
+# 仅在 Tag 推送触发时执行（即正式发布流程）
 # 权限：需要 contents: write（创建 Release 和上传附件）
   Release:
-    if: ${{ !cancelled() && inputs.enable_release && needs.Build.result == 'success' }}
+    # 前置条件：Build 成功 + 是 Tag 触发
+    if: ${{ !cancelled() && (needs.Build.result == 'success') && startsWith(github.event.ref, 'refs/tags/') }}
     needs: Build
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
       # Step 1: 下载所有前置 Job 上传的产物
+      # actions/download-artifact@v4 会把 code_quality_report、unit_test_report、artifacts 全部下载到当前目录
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           path: .
 
-      # Step 2: 验证下载的产物
-      - name: Verify artifact
-        run: |
-          echo "=== Release assets ==="
-          ls -la artifacts/
-          ARCHIVE=$(ls artifacts/*.tar.gz 2>/dev/null | head -1)
-          if [ -z "${ARCHIVE}" ] || [ ! -f "${ARCHIVE}" ]; then
-            echo "::error::No release archive found!"
-            exit 1
-          fi
-          echo "Archive: ${ARCHIVE}"
-          echo "Size: $(du -h "${ARCHIVE}" | cut -f1)"
-          echo ""
-          echo "Archive contents:"
-          tar tzf "${ARCHIVE}"
-
-      # Step 3: 收集要附加到 Release 的文件
-      - name: Collect release files
-        id: release_files
-        run: |
-          {
-            echo "files<<EOF"
-            [ -f "artifacts/artifacts.tar.gz" ] && echo "artifacts/artifacts.tar.gz"
-            [ "${{ inputs.enable_code_analysis }}" = "true" ] && [ -f "code_quality_report/code_quality_report.tar.gz" ] && echo "code_quality_report/code_quality_report.tar.gz"
-            [ "${{ inputs.enable_unit_test }}" = "true" ] && [ -f "unit_test_report/unit_test_report.tar.gz" ] && echo "unit_test_report/unit_test_report.tar.gz"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-
-      # Step 4: 创建 GitHub Release
-      # - 附加产物：固件产物（必选）、代码质量报告（可选）、单元测试报告（可选）
+      # Step 2: 创建 GitHub Release
+      # - 附加产物：代码质量报告（可选）、单元测试报告（可选）、固件产物（必选）
+      # - MG301 平台直接发布（非草稿），其他平台默认为草稿模式供审核
       # - fail_on_unmatched_files: true 确保文件路径错误时 Job 失败
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.release_files.outputs.files }}
-          generate_release_notes: true
-          draft: false
-          prerelease: false
+          files: |
+            ${{ inputs.enable_code_analysis && 'code_quality_report/code_quality_report.tar.gz' || '' }}
+            ${{ inputs.enable_unit_test && 'unit_test_report/unit_test_report.tar.gz' || '' }}
+            artifacts/artifacts.tar.gz
+          draft: ${{ inputs.platform != 'silabs_mg301' }}
           fail_on_unmatched_files: true
